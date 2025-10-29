@@ -1,0 +1,163 @@
+name: docker-android-max-specs
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Session hours (max 6)'
+        required: false
+        default: '6'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          
+          echo "✅ KVM enabled"
+          ls -la /dev/kvm
+      
+      - name: Install Requirements
+        run: |
+          echo "📦 Installing ADB..."
+          sudo apt-get update -qq
+          sudo apt-get install -y android-sdk-platform-tools
+          
+          adb version
+          echo "✅ ADB ready"
+      
+      - name: Free Maximum Space
+        run: |
+          echo "🧹 Freeing space..."
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+          sudo docker image prune --all --force
+          df -h
+      
+      - name: Install FRP
+        run: |
+          echo "🌐 Setting up FRP tunnel..."
+          wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
+          tar -xzf frp_0.58.1_linux_amd64.tar.gz
+          sudo cp frp_0.58.1_linux_amd64/frpc /usr/local/bin/
+          
+          cat > frpc.toml << 'EOF'
+          serverAddr = "159.195.6.61"
+          serverPort = 7000
+          transport.protocol = "kcp"
+          
+          [[proxies]]
+          name = "adb"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5555
+          remotePort = 5555
+          EOF
+          
+          nohup frpc -c frpc.toml > frpc.log 2>&1 &
+          sleep 3
+          pgrep frpc && echo "✅ FRP running"
+      
+      - name: Run Docker-Android MAX SPECS
+        run: |
+          echo ""
+          echo "========================================="
+          echo "🚀 Starting Docker-Android (MAX SPECS)"
+          echo "========================================="
+          echo ""
+          
+          # Pull image
+          docker pull budtmo/docker-android:emulator_11.0
+          
+          # Run with maximum specs
+          docker run -d \
+            --name android \
+            --privileged \
+            --device /dev/kvm \
+            -p 5555:5555 \
+            -p 6080:6080 \
+            -e DEVICE="Samsung Galaxy S10" \
+            -e DATAPARTITION=8g \
+            -e CORES=4 \
+            -e RAM=8192 \
+            -e EMULATOR_TIMEOUT=300 \
+            --cpus=4 \
+            --memory=12g \
+            budtmo/docker-android:emulator_11.0
+          
+          echo "⏳ Waiting for emulator to boot (90 seconds)..."
+          sleep 90
+          
+          echo "📱 Connecting ADB..."
+          adb connect 127.0.0.1:5555
+          adb wait-for-device
+          sleep 5
+          
+          echo ""
+          echo "✅ Status Check:"
+          adb devices
+          adb shell getprop ro.build.version.release
+          adb shell getprop ro.product.model
+          
+          echo ""
+          echo "========================================="
+          echo "✅ Docker-Android Running (MAX SPECS)"
+          echo ""
+          echo "💾 RAM: 12GB (Docker limit)"
+          echo "⚙️  CPU: 4 cores (all available)"
+          echo "💿 Disk: 8GB data partition"
+          echo "🔓 Root: Available via adb root"
+          echo "🌐 VNC: Available on port 6080 (optional)"
+          echo ""
+          echo "📱 Connect: adb connect 159.195.6.61:5555"
+          echo "🎮 Install GG: adb install GameGuardian.apk"
+          echo "🔓 Enable root: adb root"
+          echo "========================================="
+          echo ""
+          
+          # Monitor
+          HOURS=${{ inputs.duration }}
+          SECS=$((3600 * HOURS))
+          START=$(date +%s)
+          
+          echo "Session running for ${HOURS}h..."
+          echo ""
+          
+          ITER=0
+          while true; do
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START))
+            [ $ELAPSED -ge $SECS ] && break
+            
+            REMAIN=$((SECS - ELAPSED))
+            H=$((REMAIN / 3600))
+            M=$(((REMAIN % 3600) / 60))
+            
+            ITER=$((ITER + 1))
+            if [ $((ITER % 300)) -eq 0 ]; then
+              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left"
+              docker stats --no-stream android | tail -1
+            fi
+            
+            sleep 1
+          done
+          
+          echo "✅ Session complete"
+      
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: |
+            frpc.log
+          retention-days: 7
