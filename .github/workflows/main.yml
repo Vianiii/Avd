@@ -1,4 +1,4 @@
-nname: avd-rooted-gameguardian
+name: avd-rooted-gameguardian
 
 on:
   workflow_dispatch:
