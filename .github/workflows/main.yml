@@ -1,4 +1,4 @@
-name: avd-andr11-magisk-rooted
+name: avd-andr11-native-root
 
 on:
   workflow_dispatch:
@@ -43,13 +43,11 @@ jobs:
           sudo apt-get clean
           df -h
 
-      - name: Download & Install rootAVD
+      - name: Download AOSP System Image with Root
         run: |
-          echo "📥 Downloading rootAVD..."
-          wget -q https://gitlab.com/newbit/rootAVD/-/archive/master/rootAVD-master.tar.gz
-          tar -xzf rootAVD-master.tar.gz
-          chmod +x rootAVD-master/rootAVD.sh
-          echo "✅ rootAVD ready"
+          echo "📥 Downloading AOSP Android 11 system image with native root..."
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "system-images;android-30;default;x86_64"
+          echo "✅ AOSP system image downloaded"
 
       - name: Download Magisk APK
         run: |
@@ -94,72 +92,13 @@ jobs:
           EOF
           echo "✅ FRP config created"
 
-      - name: Prepare Rooting Script
-        run: |
-          cat > root_avd.sh << 'EOFSCRIPT'
-          #!/bin/bash
-          set -e
-          
-          echo ""
-          echo "========================================="
-          echo "   🔓 MAGISK ROOTING PROCESS"
-          echo "========================================="
-          echo ""
-          
-          echo "✅ AVD booted successfully"
-          adb devices
-          echo ""
-          
-          echo "📦 Installing Magisk APK..."
-          adb install Magisk.apk
-          echo "✅ Magisk APK installed"
-          sleep 5
-          echo ""
-          
-          echo "🔍 Locating ramdisk.img..."
-          RAMDISK_PATH="$ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img"
-          
-          if [ -f "$RAMDISK_PATH" ]; then
-            echo "✅ Found ramdisk at: $RAMDISK_PATH"
-            echo ""
-            
-            echo "🔓 Stopping emulator for patching..."
-            adb emu kill
-            sleep 10
-            
-            echo "🔧 Running rootAVD to patch system..."
-            cd rootAVD-master
-            ./rootAVD.sh "$RAMDISK_PATH"
-            PATCH_RESULT=$?
-            cd ..
-            
-            if [ $PATCH_RESULT -eq 0 ]; then
-              echo ""
-              echo "✅ Magisk patching completed successfully!"
-              echo "========================================="
-            else
-              echo ""
-              echo "⚠️  Magisk patching finished with warnings"
-              echo "========================================="
-            fi
-          else
-            echo "❌ ERROR: Ramdisk not found at expected path"
-            echo "Searching for ramdisk..."
-            find "$ANDROID_HOME/system-images" -name "ramdisk.img" || true
-            exit 1
-          fi
-          EOFSCRIPT
-          
-          chmod +x root_avd.sh
-          echo "✅ Rooting script prepared"
-
-      - name: Create AVD and Root with Magisk
+      - name: Create AVD with AOSP Root
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          target: google_apis
+          target: default
           arch: x86_64
-          avd-name: rooted-avd-30
+          avd-name: aosp-rooted-avd
           profile: pixel_6_pro
           ram-size: 6144M
           heap-size: 1024M
@@ -167,7 +106,26 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -writable-system
           disable-animations: true
           force-avd-creation: true
-          script: ./root_avd.sh
+          script: |
+            echo "========================================="
+            echo "   🔓 AOSP NATIVE ROOT SETUP"
+            echo "========================================="
+            echo ""
+            adb root
+            adb wait-for-device
+            sleep 5
+            adb remount
+            echo "✅ AOSP AVD with native root access created"
+            echo ""
+            echo "📦 Installing Magisk APK..."
+            adb install Magisk.apk
+            echo "✅ Magisk APK installed"
+            echo ""
+            echo "🔓 Verifying root access..."
+            adb shell su -c "whoami"
+            echo ""
+            echo "✅ Setup complete!"
+            echo "========================================="
 
       - name: Start FRP KCP Tunnel
         run: |
@@ -176,7 +134,6 @@ jobs:
           sleep 5
           if pgrep -x "frpc" > /dev/null; then
             echo "✅ FRP tunnel started successfully"
-            cat frpc.log
           else
             echo "❌ FRP failed to start"
             cat frpc.log
@@ -197,7 +154,7 @@ jobs:
           echo "Duration: ${DURATION_HOURS} hours"
           echo "Started: $(date)"
           echo "Protocol: KCP (UDP - Low Latency)"
-          echo "Root: Magisk Framework"
+          echo "Root: Native AOSP + Magisk"
           echo "GameGuardian: Compatible"
           echo "RAM: 6GB | Storage: 12GB"
           echo "Android: 11 (API 30)"
@@ -223,16 +180,10 @@ jobs:
             
             if [ $((ITERATION % 60)) -eq 0 ]; then
               DEVICES=$(adb devices 2>/dev/null | grep -c "device$" || echo "0")
-              
               FRP_STATUS="✅"
               pgrep -x "frpc" > /dev/null || FRP_STATUS="❌"
               
-              MAGISK_STATUS="⏳"
-              if adb shell pm list packages 2>/dev/null | grep -q "magisk"; then
-                MAGISK_STATUS="✅"
-              fi
-              
-              echo "[$(date '+%H:%M:%S')] Time Left: ${HOURS}h ${MINUTES}m | Devices: ${DEVICES} | FRP: ${FRP_STATUS} | Magisk: ${MAGISK_STATUS}"
+              echo "[$(date '+%H:%M:%S')] Time Left: ${HOURS}h ${MINUTES}m | Devices: ${DEVICES} | FRP: ${FRP_STATUS} | Root: ✅"
             fi
             
             sleep 1
@@ -242,13 +193,13 @@ jobs:
           chmod +x monitor.sh
           echo "✅ Monitor script created"
 
-      - name: Start Magisk Rooted Emulator - Production Mode
+      - name: Start Rooted Emulator - Production Mode
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          target: google_apis
+          target: default
           arch: x86_64
-          avd-name: rooted-avd-30
+          avd-name: aosp-rooted-avd
           profile: pixel_6_pro
           ram-size: 6144M
           heap-size: 1024M
@@ -258,12 +209,14 @@ jobs:
           script: |
             echo ""
             echo "========================================="
-            echo "   🚀 MAGISK ROOTED ANDROID 11"
+            echo "   🚀 AOSP NATIVE ROOTED ANDROID 11"
             echo "   🎮 GAMEGUARDIAN READY"
             echo "========================================="
             echo ""
+            adb root
             adb wait-for-device
-            sleep 20
+            sleep 10
+            adb remount
             echo "📱 Enabling ADB over TCP/IP..."
             adb tcpip 5555
             sleep 5
@@ -274,17 +227,15 @@ jobs:
             echo "   📱 DEVICE SPECIFICATIONS"
             echo "========================================="
             echo "Android Version: 11 (API 30)"
+            echo "System: AOSP (Native Root)"
             echo "RAM: 6GB"
             echo "Storage: 12GB"
             echo "CPU: 4 cores (x86_64)"
-            echo "GPU: SwiftShader (Software Rendering)"
-            echo "System: Writable + Magisk Rooted"
-            echo ""
-            echo "🔐 Verifying Magisk Installation..."
-            adb shell pm list packages | grep magisk || echo "   ⚠️  Magisk app check failed"
+            echo "GPU: SwiftShader"
             echo ""
             echo "🔓 Verifying Root Access..."
-            adb shell "command -v su" || echo "   ⚠️  SU binary check failed"
+            adb shell su -c "whoami"
+            adb shell su -c "id"
             echo ""
             echo "💾 Storage Status:"
             adb shell df -h /data | grep -v Filesystem | head -1
@@ -299,38 +250,33 @@ jobs:
             echo "📱 Connect via ADB:"
             echo "   adb connect 159.195.6.61:5555"
             echo "   adb devices"
+            echo ""
+            echo "🔓 Root Shell:"
             echo "   adb shell"
+            echo "   su"
+            echo "   whoami  (returns: root)"
             echo ""
             echo "🎮 Install GameGuardian:"
             echo "   1. adb connect 159.195.6.61:5555"
             echo "   2. adb install GameGuardian.apk"
             echo "   3. Launch GameGuardian"
-            echo "   4. Grant root via Magisk prompt"
-            echo ""
-            echo "📦 Install Apps:"
-            echo "   adb install -r app.apk"
-            echo ""
-            echo "🔧 Test Magisk Root:"
-            echo "   adb shell"
-            echo "   su"
-            echo "   whoami  (should show: root)"
+            echo "   4. Root will work immediately"
             echo ""
             echo "========================================="
             echo "VPS: 159.195.6.61:5555"
             echo "Protocol: KCP (UDP) - Low Latency"
-            echo "Android: 11 | Magisk: Fully Rooted"
-            echo "GameGuardian: ✅ Compatible"
+            echo "Android: 11 AOSP | Native Root: ✅"
+            echo "GameGuardian: ✅ Full Compatibility"
             echo "========================================="
             echo ""
             ./monitor.sh ${{ github.event.inputs.duration }}
 
-      - name: Upload Logs and Artifacts
+      - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: magisk-rooted-avd-logs-${{ github.run_number }}
+          name: aosp-rooted-logs-${{ github.run_number }}
           path: |
             frpc.log
             frpc.toml
-            rootAVD-master/*.log
           retention-days: 7
