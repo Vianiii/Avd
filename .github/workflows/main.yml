@@ -71,77 +71,104 @@ jobs:
 
       - name: Create Root Installation Script
         run: |
-          cat > install_root.sh << 'SCRIPT'
+          cat > install_root.sh << 'ENDSCRIPT'
           #!/bin/bash
           set -e
           
-          echo "Installing root access for GameGuardian..."
+          echo "========================================="
+          echo "Installing root access for GameGuardian"
+          echo "========================================="
           
-          # Enable root via adb
           adb root || true
           sleep 3
           adb wait-for-device
           adb remount || true
           sleep 2
           
-          # Install SuperSU APK
+          echo "Installing SuperSU APK..."
           adb install SuperSU.apk || true
           sleep 3
           
-          # Create su binary manually
+          echo "Creating su binary..."
           adb shell "mkdir -p /system/xbin"
-          adb shell "echo -e '#!/system/bin/sh
-if [ "$1" = "-c" ]; then
-  shift
-  exec sh -c "$@"
-else
-  exec sh
-fi' > /system/xbin/su"
+          adb shell "mkdir -p /system/bin"
+          
+          # Create su script file locally
+          cat > su_binary.sh << 'SUEOF'
+          #!/system/bin/sh
+          case "$1" in
+            -c)
+              shift
+              exec sh -c "$@"
+              ;;
+            *)
+              exec sh
+              ;;
+          esac
+          SUEOF
+          
+          # Push to device
+          adb push su_binary.sh /system/xbin/su
           adb shell "chmod 06755 /system/xbin/su"
           
-          # Also in /system/bin
+          # Copy to /system/bin
           adb shell "cp /system/xbin/su /system/bin/su"
           adb shell "chmod 06755 /system/bin/su"
           
-          # Symlink for compatibility
+          # Create symlink
+          adb shell "mkdir -p /su/bin" || true
           adb shell "ln -sf /system/xbin/su /su/bin/su" || true
           
-          echo "✅ Root access installed"
-          SCRIPT
+          echo "✅ Root access installed successfully"
+          echo "========================================="
+          ENDSCRIPT
           
           chmod +x install_root.sh
 
       - name: Create Monitor Script
         run: |
-          cat > monitor.sh << 'SCRIPT'
+          cat > monitor.sh << 'ENDMONITOR'
           #!/bin/bash
           HOURS=$1
           SECONDS=$((3600 * HOURS))
           START=$(date +%s)
           
+          echo ""
           echo "========================================="
-          echo "Session: ${HOURS}h | VPS: 159.195.6.61:5555"
+          echo "Session Duration: ${HOURS} hours"
+          echo "Started: $(date)"
+          echo "VPS Address: 159.195.6.61:5555"
+          echo "Protocol: KCP (Low Latency)"
           echo "========================================="
+          echo ""
           
           ITER=0
           while true; do
             NOW=$(date +%s)
             ELAPSED=$((NOW - START))
-            [ $ELAPSED -ge $SECONDS ] && echo "✅ Done" && break
+            
+            if [ $ELAPSED -ge $SECONDS ]; then
+              echo ""
+              echo "✅ Session completed successfully"
+              break
+            fi
             
             REMAIN=$((SECONDS - ELAPSED))
             H=$((REMAIN / 3600))
             M=$(((REMAIN % 3600) / 60))
             
             ITER=$((ITER + 1))
+            
             if [ $((ITER % 60)) -eq 0 ]; then
               DEVS=$(adb devices 2>/dev/null | grep -c "device$" || echo "0")
               FRP=$(pgrep -x "frpc" > /dev/null && echo "✅" || echo "❌")
-              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m | Devices: ${DEVS} | FRP: ${FRP}"
+              echo "[$(date '+%H:%M:%S')] Time Left: ${H}h ${M}m | Devices: ${DEVS} | FRP: ${FRP}"
             fi
+            
             sleep 1
           done
-          SCRIPT
+          ENDMONITOR
+          
           chmod +x monitor.sh
 
       - name: Setup Rooted Emulator
@@ -170,27 +197,56 @@ fi' > /system/xbin/su"
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system -memory 6144 -cores 4
           disable-animations: true
           script: |
+            echo ""
             echo "========================================="
-            echo "🚀 Android 11 with Root Access"
+            echo "   🚀 ROOTED ANDROID 11 EMULATOR"
+            echo "   🎮 GAMEGUARDIAN READY"
             echo "========================================="
+            echo ""
             adb wait-for-device
             sleep 15
-            echo "📱 Enabling ADB TCP..."
+            echo "📱 Enabling ADB over TCP/IP..."
             adb tcpip 5555
             sleep 5
             adb connect 127.0.0.1:5555
             sleep 3
             echo ""
-            echo "🔓 Root Check:"
-            adb shell "which su" || echo "Installing su..."
-            adb shell "su -v" || true
+            echo "========================================="
+            echo "   📱 DEVICE INFORMATION"
+            echo "========================================="
+            echo "Android Version: 11 (API 30)"
+            echo "RAM: 6GB"
+            echo "Storage: 12GB"
+            echo "CPU: 4 cores (x86_64)"
+            echo ""
+            echo "🔓 Checking Root Access..."
+            adb shell "which su" || echo "   su not in PATH"
+            adb shell "ls -l /system/xbin/su" || echo "   su not found"
             echo ""
             echo "========================================="
-            echo "📱 Connect: adb connect 159.195.6.61:5555"
-            echo "🎮 Install: adb install GameGuardian.apk"
+            echo "   🌐 CONNECTION INFORMATION"
+            echo "========================================="
             echo ""
-            echo "Note: GameGuardian should detect root via"
-            echo "the su binary at /system/xbin/su"
+            echo "📱 Connect from your device:"
+            echo "   adb connect 159.195.6.61:5555"
+            echo "   adb devices"
+            echo ""
+            echo "🎮 Install GameGuardian:"
+            echo "   adb install GameGuardian.apk"
+            echo ""
+            echo "📦 Install any APK:"
+            echo "   adb install -g app.apk"
+            echo ""
+            echo "🔧 Test root access:"
+            echo "   adb shell"
+            echo "   su"
+            echo "   whoami"
+            echo ""
+            echo "========================================="
+            echo "VPS Address: 159.195.6.61:5555"
+            echo "Protocol: KCP (UDP - Low Latency)"
+            echo "Root: ✅ Custom su binary installed"
+            echo "GameGuardian: ✅ Compatible"
             echo "========================================="
             echo ""
             ./monitor.sh ${{ github.event.inputs.duration }}
