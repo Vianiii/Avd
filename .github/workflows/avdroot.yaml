@@ -1,4 +1,4 @@
-name: avd-android11-gsi-rooted
+name: avd-android11-magisk-rooted
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ jobs:
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+          sudo udevadm trigger --name-mark=kvm
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -37,23 +37,17 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
 
-      - name: Download Pre-Rooted Android 11 GSI
+      - name: Download rootAVD and Magisk
         run: |
-          echo "📥 Downloading Android 11 GSI with phh's SuperUser..."
-          # Download Phh's Android 11 GSI (pre-rooted with SuperUser)
-          wget -O system.img.xz "https://github.com/phhusson/treble_experimentations/releases/download/v405/system-squeak-arm64-ab-vndklite.img.xz"
-          
-          # Extract
-          xz -d system.img.xz
-          
-          echo "✅ Pre-rooted GSI downloaded"
-
-      - name: Download rootAVD Script
-        run: |
-          echo "📥 Downloading rootAVD for proper Magisk installation..."
+          echo "📥 Downloading rootAVD..."
           wget -q https://gitlab.com/newbit/rootAVD/-/archive/master/rootAVD-master.tar.gz
           tar -xzf rootAVD-master.tar.gz
           chmod +x rootAVD-master/rootAVD.sh
+          
+          echo "📥 Downloading Magisk..."
+          wget -q "https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk" -O Magisk.apk
+          
+          echo "✅ Downloads complete"
 
       - name: Install FRP
         run: |
@@ -82,6 +76,84 @@ jobs:
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
 
+      - name: Create Rooting Script
+        run: |
+          cat > root_avd.sh << 'SCRIPT'
+          #!/bin/bash
+          set -e
+          
+          echo "========================================="
+          echo "Installing Magisk Root via rootAVD"
+          echo "========================================="
+          
+          # Wait for device
+          adb wait-for-device
+          sleep 5
+          
+          # Install Magisk APK
+          echo "Installing Magisk APK..."
+          adb install Magisk.apk
+          sleep 3
+          
+          # Stop emulator for patching
+          echo "Stopping emulator for Magisk patching..."
+          adb emu kill
+          sleep 10
+          
+          # Run rootAVD
+          echo "Running rootAVD to install Magisk..."
+          RAMDISK="$ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img"
+          
+          if [ -f "$RAMDISK" ]; then
+            cd rootAVD-master
+            bash ./rootAVD.sh "$RAMDISK"
+            cd ..
+            echo "✅ Magisk installation complete"
+          else
+            echo "❌ Ramdisk not found"
+            exit 1
+          fi
+          SCRIPT
+          
+          chmod +x root_avd.sh
+
+      - name: Create Monitor Script
+        run: |
+          cat > monitor.sh << 'SCRIPT'
+          #!/bin/bash
+          HOURS=$1
+          SECS=$((3600 * HOURS))
+          START=$(date +%s)
+          
+          echo ""
+          echo "========================================="
+          echo "Session: ${HOURS}h | VPS: 159.195.6.61:5555"
+          echo "========================================="
+          echo ""
+          
+          ITER=0
+          while true; do
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START))
+            [ $ELAPSED -ge $SECS ] && echo "✅ Session complete" && break
+            
+            REMAIN=$((SECS - ELAPSED))
+            H=$((REMAIN / 3600))
+            M=$(((REMAIN % 3600) / 60))
+            
+            ITER=$((ITER + 1))
+            if [ $((ITER % 60)) -eq 0 ]; then
+              DEVS=$(adb devices 2>/dev/null | grep -c "device$" || echo "0")
+              FRP=$(pgrep -x "frpc" > /dev/null && echo "✅" || echo "❌")
+              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m | Dev: ${DEVS} | FRP: ${FRP}"
+            fi
+            
+            sleep 1
+          done
+          SCRIPT
+          
+          chmod +x monitor.sh
+
       - name: Root AVD with Magisk
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -94,41 +166,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system
           disable-animations: true
           force-avd-creation: true
-          script: |
-            echo "Installing Magisk via rootAVD..."
-            cd rootAVD-master
-            ./rootAVD.sh "$ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img"
-            cd ..
-
-      - name: Create Monitor Script
-        run: |
-          cat > monitor.sh << 'SCRIPT'
-          #!/bin/bash
-          HOURS=$1
-          SECS=$((3600 * HOURS))
-          START=$(date +%s)
-          
-          echo "========================================="
-          echo "Session: ${HOURS}h | VPS: 159.195.6.61:5555"
-          echo "========================================="
-          
-          ITER=0
-          while true; do
-            NOW=$(date +%s)
-            ELAPSED=$((NOW - START))
-            [ $ELAPSED -ge $SECS ] && echo "✅ Done" && break
-            
-            REMAIN=$((SECS - ELAPSED))
-            H=$((REMAIN / 3600))
-            M=$(((REMAIN % 3600) / 60))
-            
-            ITER=$((ITER + 1))
-            [ $((ITER % 60)) -eq 0 ] && echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left"
-            
-            sleep 1
-          done
-          SCRIPT
-          chmod +x monitor.sh
+          script: ./root_avd.sh
 
       - name: Run Magisk Rooted Emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -142,26 +180,35 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system -memory 6144 -cores 4
           disable-animations: true
           script: |
+            echo ""
             echo "========================================="
-            echo "🚀 Android 11 + Magisk Root"
-            echo "🎮 GameGuardian Compatible"
+            echo "   🚀 Android 11 + Magisk Root"
+            echo "   🎮 GameGuardian Ready"
             echo "========================================="
+            echo ""
             
             adb wait-for-device
-            sleep 15
+            sleep 20
+            
+            echo "📱 Enabling ADB TCP..."
             adb tcpip 5555
             sleep 5
             adb connect 127.0.0.1:5555
+            sleep 3
             
             echo ""
-            echo "🔓 Verifying Magisk..."
-            adb shell pm list packages | grep magisk || echo "Installing Magisk..."
-            adb shell "su -c 'echo Root works!'" || echo "Root check failed"
+            echo "🔓 Verifying Root:"
+            adb shell pm list packages | grep magisk || echo "   Magisk not found"
+            adb shell "su -c whoami" || echo "   su command not available"
             
             echo ""
-            echo "📱 Connect: adb connect 159.195.6.61:5555"
-            echo "🎮 Install GG: adb install GameGuardian.apk"
             echo "========================================="
+            echo "📱 Connect: adb connect 159.195.6.61:5555"
+            echo "🎮 Install GameGuardian:"
+            echo "   adb install GameGuardian.apk"
+            echo "   GameGuardian will detect Magisk root"
+            echo "========================================="
+            echo ""
             
             ./monitor.sh ${{ github.event.inputs.duration }}
 
@@ -170,5 +217,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: logs-${{ github.run_number }}
-          path: frpc.log
+          path: |
+            frpc.log
+            rootAVD-master/*.log
           retention-days: 7
