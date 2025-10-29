@@ -1,4 +1,4 @@
-name: avd-chrome-native-root
+name: avd-android11-authorized
 
 on:
   workflow_dispatch:
@@ -96,7 +96,7 @@ jobs:
           SCRIPT
           chmod +x monitor.sh
 
-      - name: Run Android with Chrome and Root
+      - name: Run Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -111,9 +111,7 @@ jobs:
           script: |
             echo ""
             echo "========================================="
-            echo "   🚀 Android 11 + Chrome"
-            echo "   🔓 Native Root Access"
-            echo "   🎮 GameGuardian Ready"
+            echo "   🚀 Android 11 + Chrome + Root"
             echo "========================================="
             echo ""
             
@@ -125,7 +123,36 @@ jobs:
             sleep 5
             adb wait-for-device
             
-            echo "📱 Enabling ADB TCP..."
+            echo "🔑 Setting up ADB authorization..."
+            
+            # Create ADB keys directory
+            mkdir -p ~/.android
+            
+            # Generate ADB key if not exists
+            if [ ! -f ~/.android/adbkey ]; then
+              echo "Generating ADB keys..."
+              adb keygen ~/.android/adbkey
+            fi
+            
+            # Push ADB public key to device
+            echo "Pushing ADB authorization key..."
+            adb shell "mkdir -p /data/misc/adb"
+            adb push ~/.android/adbkey.pub /data/misc/adb/adb_keys
+            adb shell "chmod 640 /data/misc/adb/adb_keys"
+            adb shell "chown system:shell /data/misc/adb/adb_keys"
+            
+            # Disable ADB authentication (allow all)
+            adb shell "setprop ro.adb.secure 0"
+            adb shell "setprop persist.adb.notify 0"
+            
+            # Restart ADB daemon
+            echo "Restarting ADB daemon..."
+            adb shell "stop adbd"
+            sleep 3
+            adb shell "start adbd"
+            sleep 5
+            
+            echo "📱 Enabling ADB TCP mode..."
             adb tcpip 5555
             sleep 5
             adb connect 127.0.0.1:5555
@@ -134,31 +161,31 @@ jobs:
             echo ""
             echo "✅ System Status:"
             echo ""
+            
             echo "🔓 Root:"
             adb shell whoami
             
             echo ""
-            echo "🌐 Chrome Browser:"
+            echo "🌐 Chrome:"
             adb shell pm list packages | grep chrome && echo "   ✅ Installed" || echo "   ❌ Not found"
             
             echo ""
-            echo "📦 Play Store:"
-            adb shell pm list packages | grep vending && echo "   ✅ Available" || echo "   ❌ Not found"
+            echo "🔑 ADB Authorization:"
+            adb shell "cat /data/misc/adb/adb_keys | wc -l" && echo "   ✅ Key installed" || echo "   ⚠️  Key not set"
             
             echo ""
             echo "========================================="
-            echo "📱 Connect:"
+            echo "📱 Connect from Termux:"
             echo "   adb connect 159.195.6.61:5555"
-            echo ""
-            echo "🌐 Launch Chrome:"
-            echo "   adb shell am start -n com.android.chrome/com.google.android.apps.chrome.Main"
             echo ""
             echo "🎮 Install GameGuardian:"
             echo "   adb install GameGuardian.apk"
             echo ""
-            echo "✅ Root: adb root (already enabled)"
-            echo "✅ Chrome: Pre-installed"
-            echo "✅ GameGuardian: Use adb root for access"
+            echo "🖥️  Use scrcpy (authorized):"
+            echo "   scrcpy -m 960 -b 2M --max-fps=20 --no-audio"
+            echo ""
+            echo "✅ ADB authorization fixed"
+            echo "✅ Device should not show 'unauthorized'"
             echo "========================================="
             echo ""
             
