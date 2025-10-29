@@ -1,4 +1,4 @@
-name: avd-android11-authorized
+name: avd-rooted-magisk-final
 
 on:
   workflow_dispatch:
@@ -36,6 +36,14 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
+
+      - name: Download rootAVD
+        run: |
+          echo "📥 Downloading rootAVD..."
+          git clone https://github.com/newbit1/rootAVD.git
+          cd rootAVD
+          chmod +x rootAVD.sh
+          echo "✅ rootAVD ready"
 
       - name: Install FRP
         run: |
@@ -96,100 +104,55 @@ jobs:
           SCRIPT
           chmod +x monitor.sh
 
-      - name: Run Android Emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          target: google_apis_playstore
-          arch: x86_64
-          profile: pixel_6_pro
-          ram-size: 6144M
-          disk-size: 12288M
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system
-          disable-animations: true
-          force-avd-creation: true
-          script: |
-            echo ""
-            echo "========================================="
-            echo "   🚀 Android 11 + Chrome + Root"
-            echo "========================================="
-            echo ""
-            
-            adb wait-for-device
-            sleep 15
-            
-            echo "🔓 Enabling root access..."
-            adb root
-            sleep 5
-            adb wait-for-device
-            
-            echo "🔑 Setting up ADB authorization..."
-            
-            # Create ADB keys directory
-            mkdir -p ~/.android
-            
-            # Generate ADB key if not exists
-            if [ ! -f ~/.android/adbkey ]; then
-              echo "Generating ADB keys..."
-              adb keygen ~/.android/adbkey
-            fi
-            
-            # Push ADB public key to device
-            echo "Pushing ADB authorization key..."
-            adb shell "mkdir -p /data/misc/adb"
-            adb push ~/.android/adbkey.pub /data/misc/adb/adb_keys
-            adb shell "chmod 640 /data/misc/adb/adb_keys"
-            adb shell "chown system:shell /data/misc/adb/adb_keys"
-            
-            # Disable ADB authentication (allow all)
-            adb shell "setprop ro.adb.secure 0"
-            adb shell "setprop persist.adb.notify 0"
-            
-            # Restart ADB daemon
-            echo "Restarting ADB daemon..."
-            adb shell "stop adbd"
-            sleep 3
-            adb shell "start adbd"
-            sleep 5
-            
-            echo "📱 Enabling ADB TCP mode..."
-            adb tcpip 5555
-            sleep 5
-            adb connect 127.0.0.1:5555
-            sleep 3
-            
-            echo ""
-            echo "✅ System Status:"
-            echo ""
-            
-            echo "🔓 Root:"
-            adb shell whoami
-            
-            echo ""
-            echo "🌐 Chrome:"
-            adb shell pm list packages | grep chrome && echo "   ✅ Installed" || echo "   ❌ Not found"
-            
-            echo ""
-            echo "🔑 ADB Authorization:"
-            adb shell "cat /data/misc/adb/adb_keys | wc -l" && echo "   ✅ Key installed" || echo "   ⚠️  Key not set"
-            
-            echo ""
-            echo "========================================="
-            echo "📱 Connect from Termux:"
-            echo "   adb connect 159.195.6.61:5555"
-            echo ""
-            echo "🎮 Install GameGuardian:"
-            echo "   adb install GameGuardian.apk"
-            echo ""
-            echo "🖥️  Use scrcpy (authorized):"
-            echo "   scrcpy -m 960 -b 2M --max-fps=20 --no-audio"
-            echo ""
-            echo "✅ ADB authorization fixed"
-            echo "✅ Device should not show 'unauthorized'"
-            echo "========================================="
-            echo ""
-            
-            ./monitor.sh ${{ github.event.inputs.duration }}
+      - name: Create and Root AVD
+        run: |
+          echo "📱 Creating AVD..."
+          echo "no" | $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd \
+            -n test_avd \
+            -k "system-images;android-30;google_apis_playstore;x86_64" \
+            -d pixel_6_pro \
+            --force
+          
+          echo "✅ AVD created"
+
+      - name: Start and Root Emulator
+        run: |
+          echo "🚀 Starting emulator..."
+          $ANDROID_HOME/emulator/emulator -avd test_avd \
+            -no-window -no-audio -gpu swiftshader_indirect \
+            -memory 6144 -cores 4 -writable-system &
+          
+          echo "⏳ Waiting for device..."
+          adb wait-for-device
+          sleep 20
+          
+          echo "🔓 Rooting with Magisk..."
+          cd rootAVD
+          ./rootAVD.sh "$ANDROID_HOME/system-images/android-30/google_apis_playstore/x86_64/ramdisk.img"
+          cd ..
+          
+          echo "✅ Magisk installed, emulator will restart..."
+          sleep 30
+          
+          echo "📱 Enabling ADB TCP..."
+          adb wait-for-device
+          sleep 15
+          adb tcpip 5555
+          sleep 5
+          adb connect 127.0.0.1:5555
+          sleep 3
+          
+          echo ""
+          echo "========================================="
+          echo "✅ Rooted Android 11 Ready!"
+          echo "📱 Connect: adb connect 159.195.6.61:5555"
+          echo "🎮 Install GG: adb install GameGuardian.apk"
+          echo "✅ Magisk Root: Active"
+          echo "✅ Chrome: Pre-installed"
+          echo "========================================="
+          echo ""
+          
+          ./monitor.sh ${{ inputs.duration }}
 
       - name: Upload Logs
         if: always()
