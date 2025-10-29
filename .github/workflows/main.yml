@@ -1,4 +1,4 @@
-name: avd-rooted-final
+name: avd-rooted-gameguardian
 
 on:
   workflow_dispatch:
@@ -63,11 +63,26 @@ jobs:
         run: |
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
+          pgrep -x "frpc" && echo "✅ FRP started" || echo "⚠️ FRP may have issues"
 
-      - name: Download SuperSU
+      - name: Create SU Binary Script
         run: |
-          wget -q "https://github.com/phhusson/superuser/releases/download/v11/Superuser-arm64.apk" -O SuperSU.apk
-          echo "✅ SuperSU downloaded"
+          cat > su_binary.sh << 'SUEOF'
+          #!/system/bin/sh
+          case "$1" in
+            -c)
+              shift
+              exec sh -c "$@"
+              ;;
+            -v|--version)
+              echo "su binary v1.0 (custom)"
+              ;;
+            *)
+              exec sh
+              ;;
+          esac
+          SUEOF
+          chmod +x su_binary.sh
 
       - name: Create Root Installation Script
         run: |
@@ -76,7 +91,7 @@ jobs:
           set -e
           
           echo "========================================="
-          echo "Installing root access for GameGuardian"
+          echo "Installing Root Access"
           echo "========================================="
           
           adb root || true
@@ -85,41 +100,24 @@ jobs:
           adb remount || true
           sleep 2
           
-          echo "Installing SuperSU APK..."
-          adb install SuperSU.apk || true
-          sleep 3
-          
           echo "Creating su binary..."
           adb shell "mkdir -p /system/xbin"
           adb shell "mkdir -p /system/bin"
           
-          # Create su script file locally
-          cat > su_binary.sh << 'SUEOF'
-          #!/system/bin/sh
-          case "$1" in
-            -c)
-              shift
-              exec sh -c "$@"
-              ;;
-            *)
-              exec sh
-              ;;
-          esac
-          SUEOF
-          
-          # Push to device
           adb push su_binary.sh /system/xbin/su
           adb shell "chmod 06755 /system/xbin/su"
           
-          # Copy to /system/bin
           adb shell "cp /system/xbin/su /system/bin/su"
           adb shell "chmod 06755 /system/bin/su"
           
-          # Create symlink
           adb shell "mkdir -p /su/bin" || true
           adb shell "ln -sf /system/xbin/su /su/bin/su" || true
           
-          echo "✅ Root access installed successfully"
+          echo "Verifying su installation..."
+          adb shell "ls -l /system/xbin/su"
+          adb shell "ls -l /system/bin/su"
+          
+          echo "✅ Root access installed"
           echo "========================================="
           ENDSCRIPT
           
@@ -135,10 +133,8 @@ jobs:
           
           echo ""
           echo "========================================="
-          echo "Session Duration: ${HOURS} hours"
-          echo "Started: $(date)"
-          echo "VPS Address: 159.195.6.61:5555"
-          echo "Protocol: KCP (Low Latency)"
+          echo "Session: ${HOURS}h | Started: $(date)"
+          echo "VPS: 159.195.6.61:5555 (KCP)"
           echo "========================================="
           echo ""
           
@@ -149,7 +145,7 @@ jobs:
             
             if [ $ELAPSED -ge $SECONDS ]; then
               echo ""
-              echo "✅ Session completed successfully"
+              echo "✅ Session completed"
               break
             fi
             
@@ -162,7 +158,7 @@ jobs:
             if [ $((ITER % 60)) -eq 0 ]; then
               DEVS=$(adb devices 2>/dev/null | grep -c "device$" || echo "0")
               FRP=$(pgrep -x "frpc" > /dev/null && echo "✅" || echo "❌")
-              echo "[$(date '+%H:%M:%S')] Time Left: ${H}h ${M}m | Devices: ${DEVS} | FRP: ${FRP}"
+              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left | Devices: ${DEVS} | FRP: ${FRP}"
             fi
             
             sleep 1
@@ -171,7 +167,7 @@ jobs:
           
           chmod +x monitor.sh
 
-      - name: Setup Rooted Emulator
+      - name: Setup Rooted AVD
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -199,54 +195,29 @@ jobs:
           script: |
             echo ""
             echo "========================================="
-            echo "   🚀 ROOTED ANDROID 11 EMULATOR"
+            echo "   🚀 ROOTED ANDROID 11"
             echo "   🎮 GAMEGUARDIAN READY"
             echo "========================================="
             echo ""
             adb wait-for-device
             sleep 15
-            echo "📱 Enabling ADB over TCP/IP..."
+            echo "📱 Enabling ADB TCP/IP..."
             adb tcpip 5555
             sleep 5
             adb connect 127.0.0.1:5555
             sleep 3
             echo ""
-            echo "========================================="
-            echo "   📱 DEVICE INFORMATION"
-            echo "========================================="
-            echo "Android Version: 11 (API 30)"
-            echo "RAM: 6GB"
-            echo "Storage: 12GB"
-            echo "CPU: 4 cores (x86_64)"
+            echo "📊 Device Info:"
+            echo "Android: 11 | RAM: 6GB | Storage: 12GB"
             echo ""
-            echo "🔓 Checking Root Access..."
-            adb shell "which su" || echo "   su not in PATH"
-            adb shell "ls -l /system/xbin/su" || echo "   su not found"
+            echo "🔓 Root Status:"
+            adb shell "which su" || echo "su not in PATH"
+            adb shell "ls -l /system/xbin/su" || echo "su not found"
+            adb shell "/system/xbin/su -v" || true
             echo ""
             echo "========================================="
-            echo "   🌐 CONNECTION INFORMATION"
-            echo "========================================="
-            echo ""
-            echo "📱 Connect from your device:"
-            echo "   adb connect 159.195.6.61:5555"
-            echo "   adb devices"
-            echo ""
-            echo "🎮 Install GameGuardian:"
-            echo "   adb install GameGuardian.apk"
-            echo ""
-            echo "📦 Install any APK:"
-            echo "   adb install -g app.apk"
-            echo ""
-            echo "🔧 Test root access:"
-            echo "   adb shell"
-            echo "   su"
-            echo "   whoami"
-            echo ""
-            echo "========================================="
-            echo "VPS Address: 159.195.6.61:5555"
-            echo "Protocol: KCP (UDP - Low Latency)"
-            echo "Root: ✅ Custom su binary installed"
-            echo "GameGuardian: ✅ Compatible"
+            echo "📱 Connect: adb connect 159.195.6.61:5555"
+            echo "🎮 Install GG: adb install GameGuardian.apk"
             echo "========================================="
             echo ""
             ./monitor.sh ${{ github.event.inputs.duration }}
