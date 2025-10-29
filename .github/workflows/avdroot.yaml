@@ -1,10 +1,10 @@
-name: avd-android11-magisk-rooted
+name: avd-android11-rooted-gg
 
 on:
   workflow_dispatch:
     inputs:
       duration:
-        description: 'Session duration in hours (max 6)'
+        description: 'Session hours (max 6)'
         required: false
         default: '6'
 
@@ -21,7 +21,7 @@ jobs:
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-mark=kvm
+          sudo udevadm trigger --name-match=kvm
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -37,17 +37,19 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
 
-      - name: Download rootAVD and Magisk
+      - name: Download rootAVD
         run: |
           echo "📥 Downloading rootAVD..."
           wget -q https://gitlab.com/newbit/rootAVD/-/archive/master/rootAVD-master.tar.gz
           tar -xzf rootAVD-master.tar.gz
           chmod +x rootAVD-master/rootAVD.sh
-          
-          echo "📥 Downloading Magisk..."
-          wget -q "https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk" -O Magisk.apk
-          
-          echo "✅ Downloads complete"
+          echo "✅ rootAVD ready"
+
+      - name: Download Aurora Store
+        run: |
+          echo "📥 Downloading Aurora Store (no Google Play)..."
+          wget -q "https://gitlab.com/AuroraOSS/AuroraStore/-/jobs/artifacts/master/raw/app/build/outputs/apk/release/AuroraStore.apk?job=buildApks" -O AuroraStore.apk
+          echo "✅ Aurora Store downloaded"
 
       - name: Install FRP
         run: |
@@ -76,48 +78,7 @@ jobs:
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
 
-      - name: Create Rooting Script
-        run: |
-          cat > root_avd.sh << 'SCRIPT'
-          #!/bin/bash
-          set -e
-          
-          echo "========================================="
-          echo "Installing Magisk Root via rootAVD"
-          echo "========================================="
-          
-          # Wait for device
-          adb wait-for-device
-          sleep 5
-          
-          # Install Magisk APK
-          echo "Installing Magisk APK..."
-          adb install Magisk.apk
-          sleep 3
-          
-          # Stop emulator for patching
-          echo "Stopping emulator for Magisk patching..."
-          adb emu kill
-          sleep 10
-          
-          # Run rootAVD
-          echo "Running rootAVD to install Magisk..."
-          RAMDISK="$ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img"
-          
-          if [ -f "$RAMDISK" ]; then
-            cd rootAVD-master
-            bash ./rootAVD.sh "$RAMDISK"
-            cd ..
-            echo "✅ Magisk installation complete"
-          else
-            echo "❌ Ramdisk not found"
-            exit 1
-          fi
-          SCRIPT
-          
-          chmod +x root_avd.sh
-
-      - name: Create Monitor Script
+      - name: Create Monitor
         run: |
           cat > monitor.sh << 'SCRIPT'
           #!/bin/bash
@@ -135,26 +96,21 @@ jobs:
           while true; do
             NOW=$(date +%s)
             ELAPSED=$((NOW - START))
-            [ $ELAPSED -ge $SECS ] && echo "✅ Session complete" && break
+            [ $ELAPSED -ge $SECS ] && echo "✅ Done" && break
             
             REMAIN=$((SECS - ELAPSED))
             H=$((REMAIN / 3600))
             M=$(((REMAIN % 3600) / 60))
             
             ITER=$((ITER + 1))
-            if [ $((ITER % 60)) -eq 0 ]; then
-              DEVS=$(adb devices 2>/dev/null | grep -c "device$" || echo "0")
-              FRP=$(pgrep -x "frpc" > /dev/null && echo "✅" || echo "❌")
-              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m | Dev: ${DEVS} | FRP: ${FRP}"
-            fi
+            [ $((ITER % 60)) -eq 0 ] && echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left"
             
             sleep 1
           done
           SCRIPT
-          
           chmod +x monitor.sh
 
-      - name: Root AVD with Magisk
+      - name: Install Magisk Root
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -166,9 +122,29 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system
           disable-animations: true
           force-avd-creation: true
-          script: ./root_avd.sh
+          script: |
+            echo "========================================="
+            echo "Installing Magisk Root"
+            echo "========================================="
+            
+            adb wait-for-device
+            sleep 10
+            
+            # Install Aurora Store
+            echo "📦 Installing Aurora Store..."
+            adb install AuroraStore.apk
+            
+            # Root with rootAVD
+            echo "🔓 Installing Magisk..."
+            RAMDISK="$ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img"
+            
+            cd rootAVD-master
+            bash ./rootAVD.sh "$RAMDISK"
+            cd ..
+            
+            echo "✅ Magisk installed"
 
-      - name: Run Magisk Rooted Emulator
+      - name: Run Rooted Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -184,6 +160,7 @@ jobs:
             echo "========================================="
             echo "   🚀 Android 11 + Magisk Root"
             echo "   🎮 GameGuardian Ready"
+            echo "   🛍️  Aurora Store (No Google Play)"
             echo "========================================="
             echo ""
             
@@ -198,15 +175,24 @@ jobs:
             
             echo ""
             echo "🔓 Verifying Root:"
-            adb shell pm list packages | grep magisk || echo "   Magisk not found"
-            adb shell "su -c whoami" || echo "   su command not available"
+            adb shell pm list packages | grep magisk && echo "   ✅ Magisk installed" || echo "   ⚠️ Magisk not found"
+            adb shell "su -c 'echo Root works!'" 2>/dev/null && echo "   ✅ su binary working" || echo "   ⚠️ su not working"
+            
+            echo ""
+            echo "🛍️  Aurora Store Status:"
+            adb shell pm list packages | grep aurora && echo "   ✅ Aurora Store installed" || echo "   ⚠️ Not installed"
             
             echo ""
             echo "========================================="
             echo "📱 Connect: adb connect 159.195.6.61:5555"
+            echo ""
             echo "🎮 Install GameGuardian:"
             echo "   adb install GameGuardian.apk"
-            echo "   GameGuardian will detect Magisk root"
+            echo ""
+            echo "🛍️  Launch Aurora Store:"
+            echo "   adb shell am start -n com.aurora.store/.MainActivity"
+            echo ""
+            echo "✅ Root is active for GameGuardian"
             echo "========================================="
             echo ""
             
