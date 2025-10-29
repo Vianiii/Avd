@@ -1,10 +1,10 @@
-name: docker-android-gg-fixed
+name: android-emulator-rooted
 
 on:
   workflow_dispatch:
     inputs:
       duration:
-        description: 'Session hours (max 6)'
+        description: 'Session hours'
         required: false
         default: '6'
 
@@ -14,28 +14,31 @@ jobs:
     timeout-minutes: 360
     
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
+      - uses: actions/checkout@v4
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           sudo chmod 666 /dev/kvm
-      
-      - name: Install Requirements
+
+      - name: Install ADB
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y android-sdk-platform-tools
-          adb version
-      
-      - name: Install FRP
+
+      - name: Free Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+          sudo docker image prune --all --force
+
+      - name: Setup FRP
         run: |
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
-          sudo cp frp_0.58.1_linux_amd64/frpc /usr/local/bin/
-          
+          sudo cp frp_0.58.1_linux_amd64/frpc /tmp/frpc
+          sudo chmod +x /tmp/frpc
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
@@ -47,121 +50,32 @@ jobs:
           localPort = 5555
           remotePort = 5555
           EOF
-          
-          nohup frpc -c frpc.toml > frpc.log 2>&1 &
-      
-      - name: Run Docker-Android with Root
+          nohup /tmp/frpc -c frpc.toml > frpc.log 2>&1 &
+
+      - name: Run Android
         run: |
-          echo "========================================="
-          echo "🚀 Starting Docker-Android (Rooted)"
-          echo "========================================="
-          
-          # Kill any existing emulators
-          adb kill-server
-          pkill -9 qemu-system || true
-          pkill -9 emulator || true
-          sleep 3
-          
+          adb kill-server || true
           docker pull budtmo/docker-android:emulator_11.0
-          
-          docker run -d \
-            --name android \
-            --privileged \
-            --device /dev/kvm \
-            -p 5555:5555 \
-            -e DEVICE="Samsung Galaxy S10" \
-            -e DATAPARTITION=8g \
-            -e CORES=4 \
-            -e RAM=8192 \
-            --cpus=4 \
-            --memory=12g \
-            budtmo/docker-android:emulator_11.0
-          
-          echo "⏳ Waiting for boot (90s)..."
+          docker run -d --name android --privileged --device /dev/kvm -p 5555:5555 -e DEVICE="Samsung Galaxy S10" -e DATAPARTITION=8g -e CORES=4 -e RAM=8192 --cpus=4 --memory=12g budtmo/docker-android:emulator_11.0
           sleep 90
-          
-          # Start fresh ADB server
-          adb start-server
-          sleep 3
-          
           adb connect 127.0.0.1:5555
           sleep 5
-          
-          # Use -s to specify device if multiple exist
-          DEVICE=$(adb devices | grep "5555" | awk '{print $1}')
-          echo "Device: $DEVICE"
-          
+          DEVICE=$(adb devices | grep 5555 | awk '{print $1}')
           adb -s $DEVICE wait-for-device
           sleep 10
-          
-          echo "🔓 Setting up root for GameGuardian..."
-          
-          # Create su binary
-          adb -s $DEVICE shell "cat > /data/local/tmp/su << 'SUEOF'
-          #!/system/bin/sh
-          case "$1" in
-            -c)
-              shift
-              exec sh -c "$@"
-              ;;
-            -v|--version)
-              echo "20.4-Magisk"
-              ;;
-            *)
-              exec sh
-              ;;
-          esac
-          SUEOF"
-          
-          adb -s $DEVICE shell "chmod 755 /data/local/tmp/su"
-          adb -s $DEVICE shell "mkdir -p /sbin"
-          adb -s $DEVICE shell "ln -sf /data/local/tmp/su /sbin/su 2>/dev/null || true"
-          
-          echo ""
-          echo "✅ Testing su binary:"
-          adb -s $DEVICE shell "/data/local/tmp/su -v"
-          
-          echo ""
-          echo "========================================="
-          echo "✅ Docker-Android Ready for GameGuardian"
-          echo ""
-          echo "💾 RAM: 12GB"
-          echo "⚙️  CPU: 4 cores"
-          echo "💿 Disk: 8GB"
-          echo "🔓 Root: su binary installed"
-          echo ""
-          echo "📱 Connect: adb connect 159.195.6.61:5555"
-          echo "🎮 Install GG: adb install GameGuardian.apk"
-          echo ""
-          echo "✅ GameGuardian will detect root"
-          echo "========================================="
-          echo ""
-          
-          # Monitor
-          HOURS=${{ inputs.duration }}
-          SECS=$((3600 * HOURS))
-          START=$(date +%s)
-          
-          echo "Running for ${HOURS}h..."
-          
-          ITER=0
-          while true; do
-            NOW=$(date +%s)
-            ELAPSED=$((NOW - START))
-            [ $ELAPSED -ge $SECS ] && break
-            
-            REMAIN=$((SECS - ELAPSED))
-            H=$((REMAIN / 3600))
-            M=$(((REMAIN % 3600) / 60))
-            
-            ITER=$((ITER + 1))
-            [ $((ITER % 300)) -eq 0 ] && echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left"
-            
-            sleep 1
-          done
-          
-          echo "✅ Complete"
-      
+          adb -s $DEVICE shell 'cat > /data/local/tmp/su << "EOF"
+#!/system/bin/sh
+case "$1" in
+  -c) shift; exec sh -c "$@" ;;
+  -v) echo "20.4-Magisk" ;;
+  *) exec sh "$@" ;;
+esac
+EOF'
+          adb -s $DEVICE shell chmod 755 /data/local/tmp/su
+          adb -s $DEVICE shell /data/local/tmp/su -v
+          echo "READY - Connect: adb connect 159.195.6.61:5555"
+          sleep $((3600 * ${{ inputs.duration }}))
+
       - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
