@@ -1,9 +1,11 @@
-name: android-x86-prerooted
+name: android-x86-max-specs
 
 on:
   workflow_dispatch:
     inputs:
       duration:
+        description: 'Session hours (max 6)'
+        required: false
         default: '6'
 
 jobs:
@@ -12,19 +14,52 @@ jobs:
     timeout-minutes: 360
     
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          
+          echo "CPU Info:"
+          lscpu | grep -E "Model name|CPU(s)|Thread|Core"
+          
+          echo "RAM Info:"
+          free -h
+      
+      - name: Free Maximum Space
+        run: |
+          echo "Before cleanup:"
+          df -h
+          
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/hostedtoolcache
+          sudo docker image prune --all --force
+          sudo apt-get clean
+          
+          echo "After cleanup:"
+          df -h
       
       - name: Setup Android-x86
         run: |
           echo "📥 Downloading Android-x86 (pre-rooted)..."
-          wget -q "https://sourceforge.net/projects/android-x86/files/Release%209.0/android-x86_64-9.0-r2.iso" -O android-x86.iso
+          wget -q "https://sourceforge.net/projects/android-x86/files/Release%209.0/android-x86_64-9.0-r2.iso/download" -O android-x86.iso || \
+          wget -q "https://osdn.net/projects/android-x86/downloads/69704/android-x86_64-9.0-r2.iso" -O android-x86.iso
           
-          # Install QEMU
-          sudo apt-get update
-          sudo apt-get install -y qemu-kvm qemu-system-x86
+          ls -lh android-x86.iso
           
-          # Create virtual disk
-          qemu-img create -f qcow2 android-disk.qcow2 8G
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-kvm qemu-system-x86 qemu-utils
+          
+          # Create 20GB disk (max reasonable)
+          qemu-img create -f qcow2 android-disk.qcow2 20G
+          echo "✅ 20GB disk created"
       
       - name: Install FRP
         run: |
@@ -45,25 +80,92 @@ jobs:
           EOF
           
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
+          sleep 3
+          pgrep frpc && echo "✅ FRP running"
       
-      - name: Run Android-x86
+      - name: Run Android-x86 MAX SPECS
         run: |
-          qemu-system-x86_64 \
+          echo ""
+          echo "========================================="
+          echo "🚀 Starting Android-x86 with MAX SPECS"
+          echo "========================================="
+          echo ""
+          
+          # GitHub Actions runners have:
+          # - 4 CPU cores
+          # - 16GB RAM
+          # - ~14GB free disk
+          
+          sudo qemu-system-x86_64 \
             -enable-kvm \
-            -m 4096 \
-            -smp 2 \
-            -cpu host \
-            -net nic \
-            -net user,hostfwd=tcp::5555-:5555 \
+            -m 12288 \
+            -smp 4 \
+            -cpu host,+x2apic,+avx,+avx2 \
+            -device virtio-net-pci,netdev=net0 \
+            -netdev user,id=net0,hostfwd=tcp::5555-:5555 \
             -cdrom android-x86.iso \
-            -hda android-disk.qcow2 \
+            -drive file=android-disk.qcow2,if=virtio,cache=writeback \
             -boot d \
-            -display none &
+            -vga virtio \
+            -device virtio-mouse-pci \
+            -device virtio-keyboard-pci \
+            -device AC97 \
+            -display none \
+            -no-reboot &
           
-          sleep 60
+          echo "⏳ Booting Android-x86..."
+          sleep 120
+          
+          echo "📱 Connecting ADB..."
           adb connect 127.0.0.1:5555
+          sleep 10
           
-          echo "✅ Android-x86 is pre-rooted!"
-          echo "Connect: adb connect 159.195.6.61:5555"
+          adb devices
           
-          sleep $((3600 * ${{ inputs.duration }}))
+          echo ""
+          echo "========================================="
+          echo "✅ Android-x86 Running (MAX SPECS)"
+          echo ""
+          echo "💾 RAM: 12GB (max for GitHub Actions)"
+          echo "⚙️  CPU: 4 cores (all available)"
+          echo "💿 Disk: 20GB virtual disk"
+          echo "🔓 Root: Pre-installed (no setup needed)"
+          echo ""
+          echo "📱 Connect: adb connect 159.195.6.61:5555"
+          echo "🎮 Install GG: adb install GameGuardian.apk"
+          echo "========================================="
+          echo ""
+          
+          # Monitor and keep alive
+          HOURS=${{ inputs.duration }}
+          SECS=$((3600 * HOURS))
+          START=$(date +%s)
+          
+          ITER=0
+          while true; do
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START))
+            [ $ELAPSED -ge $SECS ] && break
+            
+            REMAIN=$((SECS - ELAPSED))
+            H=$((REMAIN / 3600))
+            M=$(((REMAIN % 3600) / 60))
+            
+            ITER=$((ITER + 1))
+            if [ $((ITER % 300)) -eq 0 ]; then
+              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left"
+              adb devices | grep -q "5555.*device" && echo "  ✅ ADB connected" || echo "  ⚠️  ADB disconnected"
+            fi
+            
+            sleep 1
+          done
+          
+          echo "✅ Session complete"
+      
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: frpc.log
+          retention-days: 7
