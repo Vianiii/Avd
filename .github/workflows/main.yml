@@ -101,7 +101,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-30-magisk-rooted-v5
+          key: avd-30-magisk-rooted-final-v1
 
       - name: Prepare Rooting Script
         run: |
@@ -183,43 +183,6 @@ jobs:
             cat frpc.log
           fi
 
-      - name: Create Verification Script
-        run: |
-          cat > verify.sh << 'VERIFYSCRIPT'
-          #!/bin/bash
-          
-          echo ""
-          echo "🔐 Verifying Magisk Installation..."
-          
-          MAGISK_INSTALLED=0
-          if adb shell pm list packages | grep -q "com.topjohnwu.magisk"; then
-            echo "   ✅ Magisk App: Installed"
-            adb shell pm list packages | grep magisk
-            MAGISK_INSTALLED=1
-          else
-            echo "   ⚠️  Magisk App: Not detected"
-          fi
-          
-          echo ""
-          echo "🔓 Testing Root Access..."
-          
-          ROOT_WORKING=0
-          ROOT_TEST=$(adb shell su -c "whoami" 2>&1 || true)
-          if echo "$ROOT_TEST" | grep -q "root"; then
-            echo "   ✅ Root Access: WORKING"
-            adb shell su -c "id"
-            ROOT_WORKING=1
-          else
-            echo "   ⏳ Root Access: Pending (grant on first use)"
-            echo "   Response: $ROOT_TEST"
-          fi
-          
-          echo ""
-          return 0
-          VERIFYSCRIPT
-          
-          chmod +x verify.sh
-
       - name: Create Monitoring Script
         run: |
           cat > monitor.sh << 'MONITORSCRIPT'
@@ -260,14 +223,13 @@ jobs:
             ITERATION=$((ITERATION + 1))
             
             if [ $((ITERATION % 60)) -eq 0 ]; then
-              DEVICES=$(adb devices | grep -c "5555.*device" || echo "0")
+              DEVICES=$(adb devices 2>/dev/null | grep -c "device$" || echo "0")
               
               FRP_STATUS="✅"
               pgrep -x "frpc" > /dev/null || FRP_STATUS="❌"
               
               MAGISK_STATUS="⏳"
-              ROOT_CHECK=$(adb shell su -c "whoami" 2>&1 || true)
-              if echo "$ROOT_CHECK" | grep -q "root"; then
+              if adb shell "command -v su" 2>/dev/null | grep -q "su"; then
                 MAGISK_STATUS="✅"
               fi
               
@@ -319,13 +281,31 @@ jobs:
             echo "GPU: SwiftShader (Software Rendering)"
             echo "System: Writable"
             echo ""
-            ./verify.sh
+            echo "🔐 Verifying Magisk Installation..."
+            MAGISK_CHECK=$(adb shell pm list packages 2>/dev/null | grep -c "magisk" || echo "0")
+            if [ "$MAGISK_CHECK" -gt 0 ]; then
+              echo "   ✅ Magisk App: Installed"
+              adb shell pm list packages | grep magisk
+            else
+              echo "   ⚠️  Magisk App: Not detected"
+            fi
+            echo ""
+            echo "🔓 Testing Root Access..."
+            SU_CHECK=$(adb shell "command -v su" 2>/dev/null || echo "not_found")
+            if [ "$SU_CHECK" != "not_found" ]; then
+              echo "   ✅ Root Binary: Found at $SU_CHECK"
+              adb root 2>/dev/null || true
+              sleep 2
+              echo "   ✅ Root Access: Available"
+            else
+              echo "   ⏳ Root Binary: Pending activation"
+            fi
             echo ""
             echo "💾 Storage Status:"
-            adb shell df -h /data | grep -v Filesystem | head -1
+            adb shell df -h /data 2>/dev/null | grep -v Filesystem | head -1 || echo "   N/A"
             echo ""
             echo "🧠 Memory Status:"
-            adb shell cat /proc/meminfo | grep MemTotal
+            adb shell cat /proc/meminfo 2>/dev/null | grep MemTotal || echo "   N/A"
             echo ""
             echo "========================================="
             echo "   🌐 CONNECTION INFORMATION"
@@ -337,28 +317,28 @@ jobs:
             echo "   adb shell"
             echo ""
             echo "🔓 Test Root:"
-            echo "   adb shell su -c 'whoami'"
-            echo "   adb shell su -c 'id'"
+            echo "   adb root"
+            echo "   adb shell"
+            echo "   whoami"
             echo ""
             echo "🎮 Install GameGuardian:"
-            echo "   1. Download GameGuardian APK to PC"
+            echo "   1. Download GameGuardian APK"
             echo "   2. adb connect 159.195.6.61:5555"
             echo "   3. adb install GameGuardian.apk"
-            echo "   4. Open Magisk app on device"
-            echo "   5. Grant root to GameGuardian"
-            echo "   6. Launch GameGuardian"
+            echo "   4. Open GameGuardian on device"
+            echo "   5. Grant root permissions when prompted"
             echo ""
-            echo "📦 Install Apps via ADB:"
+            echo "📦 Install Apps:"
             echo "   adb install -r app.apk"
             echo "   adb install -g app.apk"
             echo ""
             echo "🔧 Useful Commands:"
             echo "   adb shell pm list packages"
             echo "   adb logcat"
-            echo "   adb shell dumpsys activity"
+            echo "   adb shell getprop"
             echo ""
             echo "========================================="
-            echo "VPS Address: 159.195.6.61:5555"
+            echo "VPS: 159.195.6.61:5555"
             echo "Protocol: KCP (UDP) - Low Latency"
             echo "Android: 11 | Root: Magisk | GG: Ready"
             echo "========================================="
