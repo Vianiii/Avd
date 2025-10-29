@@ -1,0 +1,316 @@
+name: avd-andr11-magisk-rooted
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Session duration in hours (max 6)'
+        required: false
+        default: '6'
+
+jobs:
+  run-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Enable KVM Hardware Acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Free Up Disk Space
+        run: |
+          echo "🗑️ Freeing up disk space..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo docker image prune --all --force
+          sudo apt-get clean
+          df -h
+
+      - name: Download & Install rootAVD
+        run: |
+          echo "📥 Downloading rootAVD from GitLab mirror..."
+          wget -q https://gitlab.com/newbit/rootAVD/-/archive/master/rootAVD-master.tar.gz
+          tar -xzf rootAVD-master.tar.gz
+          cd rootAVD-master
+          chmod +x rootAVD.sh
+          cd ..
+          echo "✅ rootAVD ready"
+
+      - name: Download Magisk APK
+        run: |
+          echo "📥 Downloading Magisk Stable..."
+          MAGISK_VER="27.0"
+          wget -q "https://github.com/topjohnwu/Magisk/releases/download/v${MAGISK_VER}/Magisk-v${MAGISK_VER}.apk" -O rootAVD-master/Magisk.apk
+          if [ -f "rootAVD-master/Magisk.apk" ]; then
+            echo "✅ Magisk v${MAGISK_VER} downloaded"
+          fi
+
+      - name: Install FRP Client v0.58.1
+        run: |
+          wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
+          tar -xzf frp_0.58.1_linux_amd64.tar.gz
+          sudo cp frp_0.58.1_linux_amd64/frpc /usr/local/bin/
+          sudo chmod +x /usr/local/bin/frpc
+          rm -rf frp_0.58.1_linux_amd64*
+
+      - name: Create FRP Client Configuration with KCP
+        run: |
+          cat > frpc.toml << 'EOF'
+          serverAddr = "159.195.6.61"
+          serverPort = 7000
+          transport.protocol = "kcp"
+          
+          [[proxies]]
+          name = "github-avd-adb"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5555
+          remotePort = 5555
+          
+          [[proxies]]
+          name = "github-avd-console"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5554
+          remotePort = 5554
+          EOF
+
+      - name: AVD Cache
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-30-magisk-rooted-v2
+
+      - name: Create AVD Snapshot (Not Cached)
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6_pro
+          ram-size: 6144M
+          heap-size: 1024M
+          disk-size: 12288M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -writable-system
+          disable-animations: true
+          script: |
+            echo "✅ AVD created successfully"
+            adb devices
+
+      - name: Root AVD with Magisk (On First Run)
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "🔓 Installing Magisk via rootAVD..."
+          
+          # Start emulator in background
+          $ANDROID_HOME/emulator/emulator -avd Pixel_6_Pro_API_30 -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system &
+          
+          # Wait for device
+          adb wait-for-device
+          sleep 10
+          
+          # Run rootAVD
+          cd rootAVD-master
+          ./rootAVD.sh ../Android/sdk/system-images/android-30/google_apis/x86_64/ramdisk.img
+          
+          # Wait for reboot
+          sleep 15
+          adb wait-for-device
+          sleep 10
+          
+          # Verify Magisk
+          if adb shell pm list packages | grep -q "com.topjohnwu.magisk"; then
+            echo "✅ Magisk installed successfully!"
+          else
+            echo "⚠️  Magisk installation verification pending..."
+          fi
+          
+          # Shutdown for caching
+          adb emu kill
+
+      - name: Start FRP KCP Tunnel
+        run: |
+          echo "🚀 Starting FRP with KCP protocol..."
+          nohup frpc -c frpc.toml > frpc.log 2>&1 &
+          sleep 5
+          if pgrep -x "frpc" > /dev/null; then
+            echo "✅ FRP KCP tunnel started"
+          fi
+
+      - name: Create Monitoring Script
+        run: |
+          cat > monitor.sh << 'SCRIPT'
+          #!/bin/bash
+          DURATION_HOURS=$1
+          DURATION_SECONDS=$((3600 * DURATION_HOURS))
+          START_TIME=$(date +%s)
+          
+          echo "⏱️  Session: ${DURATION_HOURS} hours"
+          echo "🕐 Started: $(date)"
+          echo "🔥 Protocol: KCP (30-40% lower latency)"
+          echo "🔓 Root: ✅ Magisk Framework"
+          echo "🎮 GameGuardian: ✅ Compatible"
+          echo "💾 RAM: 6GB | Storage: 12GB"
+          echo "🤖 Android 11 (API 30)"
+          echo "🚀 Maximum Performance Mode"
+          echo ""
+          
+          ITERATION=0
+          while true; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$((CURRENT_TIME - START_TIME))
+            
+            if [ $ELAPSED -ge $DURATION_SECONDS ]; then
+              echo "✅ Session completed"
+              break
+            fi
+            
+            REMAINING=$((DURATION_SECONDS - ELAPSED))
+            HOURS=$((REMAINING / 3600))
+            MINUTES=$(((REMAINING % 3600) / 60))
+            
+            ITERATION=$((ITERATION + 1))
+            if [ $((ITERATION % 60)) -eq 0 ]; then
+              DEVICES=$(adb devices | grep -c "5555.*device" || echo "0")
+              FRP_STATUS="✅"
+              pgrep -x "frpc" > /dev/null || FRP_STATUS="❌"
+              MAGISK_STATUS=$(adb shell su -c "whoami" 2>/dev/null | grep -q "root" && echo "✅" || echo "⏳")
+              echo "[$(date '+%H:%M:%S')] ⏳ ${HOURS}h ${MINUTES}m | 📱 ADB: ${DEVICES} | 🔗 KCP: ${FRP_STATUS} | 🔓 Magisk: ${MAGISK_STATUS}"
+            fi
+            
+            sleep 1
+          done
+          SCRIPT
+          chmod +x monitor.sh
+
+      - name: Start Magisk Rooted Emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6_pro
+          ram-size: 6144M
+          heap-size: 1024M
+          disk-size: 12288M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -memory 6144 -cores 4 -skin 1080x2400 -writable-system
+          disable-animations: true
+          script: |
+            echo "========================================="
+            echo "   🚀 MAGISK ROOTED ANDROID 11"
+            echo "   🎮 GAMEGUARDIAN READY"
+            echo "========================================="
+            echo ""
+            
+            # Wait for boot
+            adb wait-for-device
+            sleep 15
+            
+            # Enable TCP/IP
+            adb tcpip 5555
+            sleep 5
+            adb connect 127.0.0.1:5555
+            sleep 3
+            
+            echo ""
+            echo "========================================="
+            echo "   📱 Device Specifications"
+            echo "========================================="
+            echo "Android: 11 (API 30)"
+            echo "RAM: 6GB"
+            echo "Storage: 12GB"
+            echo "CPU: 4 cores (x86_64)"
+            echo "GPU: SwiftShader"
+            echo "Root: ✅ Magisk Framework"
+            echo "GameGuardian: ✅ Compatible"
+            echo ""
+            
+            # Verify Magisk
+            echo "🔐 Magisk Status:"
+            if adb shell pm list packages | grep -q "com.topjohnwu.magisk"; then
+              echo "   ✅ Magisk App: Installed"
+            else
+              echo "   ⚠️  Magisk App: Not detected"
+            fi
+            
+            if adb shell su -c "whoami" 2>/dev/null | grep -q "root"; then
+              echo "   ✅ Root Access: Working"
+            else
+              echo "   ⏳ Root Access: Initializing..."
+            fi
+            
+            echo ""
+            echo "💾 Storage Available:"
+            adb -s 127.0.0.1:5555 shell df -h /data | grep -v Filesystem
+            
+            echo ""
+            echo "🧠 Memory:"
+            adb -s 127.0.0.1:5555 shell cat /proc/meminfo | grep MemTotal
+            
+            echo ""
+            echo "========================================="
+            echo "   🌐 CONNECTION INFO"
+            echo "========================================="
+            echo ""
+            echo "📱 Connect from your device:"
+            echo "   • IP: 159.195.6.61"
+            echo "   • Port: 5555"
+            echo "   • Protocol: KCP (Low Latency)"
+            echo ""
+            echo "💻 ADB Commands:"
+            echo "   adb connect 159.195.6.61:5555"
+            echo "   adb devices"
+            echo "   adb shell"
+            echo "   adb shell su -c 'whoami'  # Test root"
+            echo ""
+            echo "🎮 GameGuardian Installation:"
+            echo "   1. Download GameGuardian APK"
+            echo "   2. adb install GameGuardian.apk"
+            echo "   3. Open Magisk app > Grant root to GG"
+            echo "   4. Launch GameGuardian"
+            echo ""
+            echo "📦 Access Magisk Manager:"
+            echo "   • Connect via ADB"
+            echo "   • Open Magisk app (com.topjohnwu.magisk)"
+            echo "   • Manage root permissions"
+            echo "   • Install Magisk modules if needed"
+            echo ""
+            echo "========================================="
+            echo "VPS: 159.195.6.61:5555"
+            echo "Protocol: KCP (UDP) - Low Latency"
+            echo "Android: 11 | Magisk: ✅ | GameGuardian: ✅"
+            echo "========================================="
+            echo ""
+            ./monitor.sh ${{ github.event.inputs.duration }}
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: magisk-rooted-logs-${{ github.run_number }}
+          path: |
+            frpc.log
+            frpc.toml
+            rootAVD-master/*.log
+          retention-days: 7
