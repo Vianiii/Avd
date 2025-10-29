@@ -1,4 +1,4 @@
-name: android-x86-max-specs
+name: android-x86-fixed
 
 on:
   workflow_dispatch:
@@ -17,34 +17,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
+      - name: Setup Android SDK with ADB
+        run: |
+          echo "📥 Installing Android SDK platform-tools..."
+          sudo apt-get update -qq
+          sudo apt-get install -y android-sdk-platform-tools adb
+          
+          adb version
+          echo "✅ ADB installed"
+      
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           sudo chmod 666 /dev/kvm
-          
-          echo "CPU Info:"
-          lscpu | grep -E "Model name|CPU(s)|Thread|Core"
-          
-          echo "RAM Info:"
-          free -h
       
       - name: Free Maximum Space
         run: |
-          echo "Before cleanup:"
-          df -h
-          
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache
           sudo docker image prune --all --force
-          sudo apt-get clean
-          
-          echo "After cleanup:"
-          df -h
       
       - name: Setup Android-x86
         run: |
@@ -52,14 +44,8 @@ jobs:
           wget -q "https://sourceforge.net/projects/android-x86/files/Release%209.0/android-x86_64-9.0-r2.iso/download" -O android-x86.iso || \
           wget -q "https://osdn.net/projects/android-x86/downloads/69704/android-x86_64-9.0-r2.iso" -O android-x86.iso
           
-          ls -lh android-x86.iso
-          
-          sudo apt-get update -qq
           sudo apt-get install -y qemu-kvm qemu-system-x86 qemu-utils
-          
-          # Create 20GB disk (max reasonable)
           qemu-img create -f qcow2 android-disk.qcow2 20G
-          echo "✅ 20GB disk created"
       
       - name: Install FRP
         run: |
@@ -80,40 +66,32 @@ jobs:
           EOF
           
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
-          sleep 3
           pgrep frpc && echo "✅ FRP running"
       
       - name: Run Android-x86 MAX SPECS
         run: |
           echo ""
           echo "========================================="
-          echo "🚀 Starting Android-x86 with MAX SPECS"
+          echo "🚀 Starting Android-x86 (MAX SPECS)"
           echo "========================================="
           echo ""
-          
-          # GitHub Actions runners have:
-          # - 4 CPU cores
-          # - 16GB RAM
-          # - ~14GB free disk
           
           sudo qemu-system-x86_64 \
             -enable-kvm \
             -m 12288 \
             -smp 4 \
-            -cpu host,+x2apic,+avx,+avx2 \
+            -cpu host \
             -device virtio-net-pci,netdev=net0 \
             -netdev user,id=net0,hostfwd=tcp::5555-:5555 \
             -cdrom android-x86.iso \
             -drive file=android-disk.qcow2,if=virtio,cache=writeback \
             -boot d \
             -vga virtio \
-            -device virtio-mouse-pci \
-            -device virtio-keyboard-pci \
-            -device AC97 \
             -display none \
+            -audiodev none,id=noaudio \
             -no-reboot &
           
-          echo "⏳ Booting Android-x86..."
+          echo "⏳ Booting Android-x86 (120 seconds)..."
           sleep 120
           
           echo "📱 Connecting ADB..."
@@ -124,22 +102,23 @@ jobs:
           
           echo ""
           echo "========================================="
-          echo "✅ Android-x86 Running (MAX SPECS)"
+          echo "✅ Android-x86 Running (Pre-Rooted!)"
           echo ""
-          echo "💾 RAM: 12GB (max for GitHub Actions)"
-          echo "⚙️  CPU: 4 cores (all available)"
-          echo "💿 Disk: 20GB virtual disk"
-          echo "🔓 Root: Pre-installed (no setup needed)"
+          echo "💾 RAM: 12GB"
+          echo "⚙️  CPU: 4 cores"
+          echo "💿 Disk: 20GB"
+          echo "🔓 Root: Built-in (no setup)"
           echo ""
           echo "📱 Connect: adb connect 159.195.6.61:5555"
           echo "🎮 Install GG: adb install GameGuardian.apk"
           echo "========================================="
           echo ""
           
-          # Monitor and keep alive
           HOURS=${{ inputs.duration }}
           SECS=$((3600 * HOURS))
           START=$(date +%s)
+          
+          echo "Running for ${HOURS} hours..."
           
           ITER=0
           while true; do
@@ -152,10 +131,7 @@ jobs:
             M=$(((REMAIN % 3600) / 60))
             
             ITER=$((ITER + 1))
-            if [ $((ITER % 300)) -eq 0 ]; then
-              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left"
-              adb devices | grep -q "5555.*device" && echo "  ✅ ADB connected" || echo "  ⚠️  ADB disconnected"
-            fi
+            [ $((ITER % 300)) -eq 0 ] && echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left"
             
             sleep 1
           done
