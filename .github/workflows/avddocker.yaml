@@ -1,4 +1,4 @@
-name: android-emulator-rooted
+name: android-gg-rooted
 
 on:
   workflow_dispatch:
@@ -30,9 +30,7 @@ jobs:
 
       - name: Free Space
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
           sudo docker image prune --all --force
 
       - name: Setup FRP
@@ -41,7 +39,7 @@ jobs:
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           sudo cp frp_0.58.1_linux_amd64/frpc /tmp/frpc
           sudo chmod +x /tmp/frpc
-          cat > frpc.toml << 'ENDCONFIG'
+          cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
           transport.protocol = "kcp"
@@ -51,37 +49,38 @@ jobs:
           localIP = "127.0.0.1"
           localPort = 5555
           remotePort = 5555
-          ENDCONFIG
+          EOF
           nohup /tmp/frpc -c frpc.toml > frpc.log 2>&1 &
 
-      - name: Run Android
+      - name: Run Android with Root
         run: |
           adb kill-server || true
           docker pull budtmo/docker-android:emulator_11.0
-          docker run -d --name android --privileged --device /dev/kvm -p 5555:5555 -e DEVICE="Samsung Galaxy S10" -e DATAPARTITION=8g -e CORES=4 -e RAM=8192 --cpus=4 --memory=12g budtmo/docker-android:emulator_11.0
-          sleep 90
+          docker run -d --name android --privileged --device /dev/kvm -p 5555:5555 -p 6080:6080 -e DEVICE="Samsung Galaxy S10" -e DATAPARTITION=8g -e CORES=4 -e RAM=8192 --cpus=4 --memory=12g budtmo/docker-android:emulator_11.0
+          echo "Booting (120 seconds)..."
+          sleep 120
           adb connect 127.0.0.1:5555
-          sleep 5
-          MYDEVICE=$(adb devices | grep 5555 | awk '{print $1}')
-          adb -s $MYDEVICE wait-for-device
           sleep 10
+          DEVICE=$(adb devices | grep 5555 | awk '{print $1}')
+          adb -s $DEVICE wait-for-device
+          sleep 15
           
-          echo "Creating su script"
-          adb -s $MYDEVICE shell 'echo "#!/system/bin/sh" > /data/local/tmp/su'
-          adb -s $MYDEVICE shell 'echo "exec sh "$@"" >> /data/local/tmp/su'
-          adb -s $MYDEVICE shell "chmod 755 /data/local/tmp/su"
+          echo "Creating su for GameGuardian..."
+          adb -s $DEVICE shell "echo '#!/system/bin/sh' > /data/local/tmp/su"
+          adb -s $DEVICE shell "echo 'exec sh "$@"' >> /data/local/tmp/su"
+          adb -s $DEVICE shell "chmod 755 /data/local/tmp/su"
           
-          echo "Testing su"
-          adb -s $MYDEVICE shell "/data/local/tmp/su -c id"
+          echo "Testing su..."
+          adb -s $DEVICE shell "ls -la /data/local/tmp/su"
+          adb -s $DEVICE shell "/data/local/tmp/su -c id"
           
           echo ""
-          echo "============================================"
+          echo "=========================================="
           echo "READY!"
           echo "Connect: adb connect 159.195.6.61:5555"
           echo "Root: /data/local/tmp/su"
-          echo "Install GG: adb install GameGuardian.apk"
-          echo "============================================"
-          echo ""
+          echo "VNC: http://159.195.6.61:6080"
+          echo "=========================================="
           
           sleep $((3600 * ${{ inputs.duration }}))
 
