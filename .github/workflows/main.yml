@@ -281,31 +281,17 @@ jobs:
             echo "GPU: SwiftShader (Software Rendering)"
             echo "System: Writable"
             echo ""
-            echo "🔐 Verifying Magisk Installation..."
-            MAGISK_CHECK=$(adb shell pm list packages 2>/dev/null | grep -c "magisk" || echo "0")
-            if [ "$MAGISK_CHECK" -gt 0 ]; then
-              echo "   ✅ Magisk App: Installed"
-              adb shell pm list packages | grep magisk
-            else
-              echo "   ⚠️  Magisk App: Not detected"
-            fi
+            echo "🔐 Checking Magisk Installation..."
+            adb shell pm list packages | grep magisk || echo "   ⚠️  Magisk not detected"
             echo ""
-            echo "🔓 Testing Root Access..."
-            SU_CHECK=$(adb shell "command -v su" 2>/dev/null || echo "not_found")
-            if [ "$SU_CHECK" != "not_found" ]; then
-              echo "   ✅ Root Binary: Found at $SU_CHECK"
-              adb root 2>/dev/null || true
-              sleep 2
-              echo "   ✅ Root Access: Available"
-            else
-              echo "   ⏳ Root Binary: Pending activation"
-            fi
+            echo "🔓 Checking Root Access..."
+            adb shell "command -v su" || echo "   ⏳ Root binary not found"
             echo ""
             echo "💾 Storage Status:"
-            adb shell df -h /data 2>/dev/null | grep -v Filesystem | head -1 || echo "   N/A"
+            adb shell df -h /data | grep -v Filesystem | head -1
             echo ""
             echo "🧠 Memory Status:"
-            adb shell cat /proc/meminfo 2>/dev/null | grep MemTotal || echo "   N/A"
+            adb shell cat /proc/meminfo | grep MemTotal
             echo ""
             echo "========================================="
             echo "   🌐 CONNECTION INFORMATION"
@@ -316,31 +302,23 @@ jobs:
             echo "   adb devices"
             echo "   adb shell"
             echo ""
-            echo "🔓 Test Root:"
+            echo "🔓 Enable Root:"
             echo "   adb root"
             echo "   adb shell"
-            echo "   whoami"
             echo ""
             echo "🎮 Install GameGuardian:"
-            echo "   1. Download GameGuardian APK"
-            echo "   2. adb connect 159.195.6.61:5555"
-            echo "   3. adb install GameGuardian.apk"
-            echo "   4. Open GameGuardian on device"
-            echo "   5. Grant root permissions when prompted"
+            echo "   1. adb connect 159.195.6.61:5555"
+            echo "   2. adb install GameGuardian.apk"
+            echo "   3. Launch GameGuardian on device"
+            echo "   4. Grant root when prompted"
             echo ""
             echo "📦 Install Apps:"
             echo "   adb install -r app.apk"
-            echo "   adb install -g app.apk"
-            echo ""
-            echo "🔧 Useful Commands:"
-            echo "   adb shell pm list packages"
-            echo "   adb logcat"
-            echo "   adb shell getprop"
             echo ""
             echo "========================================="
             echo "VPS: 159.195.6.61:5555"
             echo "Protocol: KCP (UDP) - Low Latency"
-            echo "Android: 11 | Root: Magisk | GG: Ready"
+            echo "Android: 11 | Root: Magisk"
             echo "========================================="
             echo ""
             ./monitor.sh ${{ github.event.inputs.duration }}
