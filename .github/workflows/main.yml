@@ -63,11 +63,13 @@ jobs:
 
       - name: Install FRP Client v0.58.1
         run: |
+          echo "📥 Downloading FRP..."
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           sudo cp frp_0.58.1_linux_amd64/frpc /usr/local/bin/
           sudo chmod +x /usr/local/bin/frpc
           rm -rf frp_0.58.1_linux_amd64*
+          echo "✅ FRP installed"
 
       - name: Create FRP Client Configuration with KCP
         run: |
@@ -90,6 +92,7 @@ jobs:
           localPort = 5554
           remotePort = 5554
           EOF
+          echo "✅ FRP config created"
 
       - name: AVD Cache
         uses: actions/cache@v4
@@ -98,7 +101,58 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-30-magisk-v3
+          key: avd-30-magisk-rooted-v4
+
+      - name: Prepare Rooting Script
+        run: |
+          cat > root_avd.sh << 'EOFSCRIPT'
+          #!/bin/bash
+          set -e
+          
+          echo "========================================="
+          echo "   🔓 MAGISK ROOTING PROCESS"
+          echo "========================================="
+          echo ""
+          
+          echo "✅ AVD booted successfully"
+          adb devices
+          echo ""
+          
+          echo "📦 Installing Magisk APK..."
+          adb install Magisk.apk
+          echo "✅ Magisk APK installed"
+          sleep 5
+          echo ""
+          
+          echo "🔍 Locating ramdisk.img..."
+          RAMDISK_PATH="$ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img"
+          
+          if [ -f "$RAMDISK_PATH" ]; then
+            echo "✅ Found ramdisk at: $RAMDISK_PATH"
+            echo ""
+            
+            echo "🔓 Stopping emulator for patching..."
+            adb emu kill
+            sleep 8
+            
+            echo "🔧 Running rootAVD to patch system..."
+            cd rootAVD-master
+            ./rootAVD.sh "$RAMDISK_PATH"
+            cd ..
+            
+            echo ""
+            echo "✅ Magisk patching completed successfully!"
+            echo "========================================="
+          else
+            echo "❌ ERROR: Ramdisk not found at expected path"
+            echo "Searching for ramdisk..."
+            find "$ANDROID_HOME/system-images" -name "ramdisk.img" || true
+            exit 1
+          fi
+          EOFSCRIPT
+          
+          chmod +x root_avd.sh
+          echo "✅ Rooting script prepared"
 
       - name: Create AVD and Root with Magisk
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -114,37 +168,7 @@ jobs:
           disk-size: 12288M
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -writable-system
           disable-animations: true
-          script: |
-            echo "✅ AVD created and booted"
-            adb devices
-            
-            # Install Magisk APK first
-            echo "📦 Installing Magisk APK..."
-            adb install Magisk.apk
-            sleep 5
-            
-            # Get AVD system image path
-            echo "🔍 Locating ramdisk.img..."
-            RAMDISK_PATH="$ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img"
-            
-            if [ -f "$RAMDISK_PATH" ]; then
-              echo "✅ Found: $RAMDISK_PATH"
-              
-              # Kill emulator for patching
-              adb emu kill
-              sleep 5
-              
-              # Run rootAVD
-              echo "🔓 Patching with rootAVD..."
-              cd rootAVD-master
-              ./rootAVD.sh "$RAMDISK_PATH"
-              cd ..
-              
-              echo "✅ Magisk patching complete"
-            else
-              echo "❌ Ramdisk not found at: $RAMDISK_PATH"
-              ls -la $ANDROID_HOME/system-images/android-30/
-            fi
+          script: ./root_avd.sh
 
       - name: Start FRP KCP Tunnel
         run: |
@@ -152,24 +176,33 @@ jobs:
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 5
           if pgrep -x "frpc" > /dev/null; then
-            echo "✅ FRP KCP tunnel started"
+            echo "✅ FRP tunnel started successfully"
+            cat frpc.log
+          else
+            echo "❌ FRP failed to start"
+            cat frpc.log
           fi
 
       - name: Create Monitoring Script
         run: |
-          cat > monitor.sh << 'SCRIPT'
+          cat > monitor.sh << 'MONITORSCRIPT'
           #!/bin/bash
           DURATION_HOURS=$1
           DURATION_SECONDS=$((3600 * DURATION_HOURS))
           START_TIME=$(date +%s)
           
-          echo "⏱️  Session: ${DURATION_HOURS} hours"
-          echo "🕐 Started: $(date)"
-          echo "🔥 Protocol: KCP (Low Latency)"
-          echo "🔓 Root: ✅ Magisk Framework"
-          echo "🎮 GameGuardian: ✅ Compatible"
-          echo "💾 RAM: 6GB | Storage: 12GB"
-          echo "🤖 Android 11 (API 30)"
+          echo ""
+          echo "========================================="
+          echo "   ⏱️  SESSION MONITORING"
+          echo "========================================="
+          echo "Duration: ${DURATION_HOURS} hours"
+          echo "Started: $(date)"
+          echo "Protocol: KCP (UDP - Low Latency)"
+          echo "Root: Magisk Framework"
+          echo "GameGuardian: Compatible"
+          echo "RAM: 6GB | Storage: 12GB"
+          echo "Android: 11 (API 30)"
+          echo "========================================="
           echo ""
           
           ITERATION=0
@@ -178,7 +211,8 @@ jobs:
             ELAPSED=$((CURRENT_TIME - START_TIME))
             
             if [ $ELAPSED -ge $DURATION_SECONDS ]; then
-              echo "✅ Session completed"
+              echo ""
+              echo "✅ Session completed after ${DURATION_HOURS} hours"
               break
             fi
             
@@ -187,20 +221,30 @@ jobs:
             MINUTES=$(((REMAINING % 3600) / 60))
             
             ITERATION=$((ITERATION + 1))
+            
+            # Status update every 60 seconds
             if [ $((ITERATION % 60)) -eq 0 ]; then
               DEVICES=$(adb devices | grep -c "5555.*device" || echo "0")
+              
               FRP_STATUS="✅"
               pgrep -x "frpc" > /dev/null || FRP_STATUS="❌"
-              MAGISK_STATUS=$(adb shell su -c "whoami" 2>/dev/null | grep -q "root" && echo "✅" || echo "⏳")
-              echo "[$(date '+%H:%M:%S')] ⏳ ${HOURS}h ${MINUTES}m | 📱 Devices: ${DEVICES} | 🔗 FRP: ${FRP_STATUS} | 🔓 Root: ${MAGISK_STATUS}"
+              
+              MAGISK_STATUS="⏳"
+              if adb shell su -c "whoami" 2>/dev/null | grep -q "root"; then
+                MAGISK_STATUS="✅"
+              fi
+              
+              echo "[$(date '+%H:%M:%S')] Time Left: ${HOURS}h ${MINUTES}m | Devices: ${DEVICES} | FRP: ${FRP_STATUS} | Root: ${MAGISK_STATUS}"
             fi
             
             sleep 1
           done
-          SCRIPT
+          MONITORSCRIPT
+          
           chmod +x monitor.sh
+          echo "✅ Monitor script created"
 
-      - name: Start Rooted Emulator - Production
+      - name: Start Magisk Rooted Emulator - Production Mode
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -214,70 +258,106 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -memory 6144 -cores 4 -writable-system
           disable-animations: true
           script: |
+            echo ""
             echo "========================================="
             echo "   🚀 MAGISK ROOTED ANDROID 11"
             echo "   🎮 GAMEGUARDIAN READY"
             echo "========================================="
             echo ""
             
-            # Wait for full boot
             adb wait-for-device
             sleep 20
             
-            # Enable TCP/IP on port 5555
+            echo "📱 Enabling ADB over TCP/IP..."
             adb tcpip 5555
             sleep 5
             adb connect 127.0.0.1:5555
             sleep 3
             
-            echo "📱 Device Info:"
-            echo "   Android: 11 (API 30)"
-            echo "   RAM: 6GB | Storage: 12GB"
-            echo "   CPU: 4 cores (x86_64)"
+            echo ""
+            echo "========================================="
+            echo "   📱 DEVICE SPECIFICATIONS"
+            echo "========================================="
+            echo "Android Version: 11 (API 30)"
+            echo "RAM: 6GB"
+            echo "Storage: 12GB"
+            echo "CPU: 4 cores (x86_64)"
+            echo "GPU: SwiftShader (Software Rendering)"
+            echo "System: Writable"
             echo ""
             
-            # Verify Magisk
-            echo "🔐 Magisk Status:"
+            echo "🔐 Verifying Magisk Installation..."
             if adb shell pm list packages | grep -q "com.topjohnwu.magisk"; then
               echo "   ✅ Magisk App: Installed"
-              adb shell pm list packages | grep magisk
+              MAGISK_PKG=$(adb shell pm list packages | grep magisk)
+              echo "   Package: $MAGISK_PKG"
             else
-              echo "   ⚠️  Magisk App: Not detected (install via ADB)"
+              echo "   ⚠️  Magisk App: Not detected"
+              echo "   Note: May need manual installation"
             fi
             
-            # Test root access
+            echo ""
+            echo "🔓 Testing Root Access..."
             if adb shell su -c "whoami" 2>/dev/null | grep -q "root"; then
-              echo "   ✅ Root Access: Working"
+              echo "   ✅ Root Access: WORKING"
+              adb shell su -c "id"
             else
-              echo "   ⏳ Root Access: Pending first grant"
+              echo "   ⏳ Root Access: Pending (grant on first use)"
             fi
             
             echo ""
+            echo "💾 Storage Status:"
+            adb shell df -h /data | grep -v Filesystem | head -1
+            
+            echo ""
+            echo "🧠 Memory Status:"
+            adb shell cat /proc/meminfo | grep MemTotal
+            
+            echo ""
             echo "========================================="
-            echo "   🌐 CONNECTION INFO"
+            echo "   🌐 CONNECTION INFORMATION"
             echo "========================================="
             echo ""
-            echo "📱 ADB Connect:"
+            echo "📱 Connect via ADB:"
             echo "   adb connect 159.195.6.61:5555"
+            echo "   adb devices"
+            echo "   adb shell"
             echo ""
-            echo "🎮 GameGuardian Setup:"
-            echo "   1. adb install GameGuardian.apk"
-            echo "   2. Open Magisk > Grant root to GG"
-            echo "   3. Launch GameGuardian"
+            echo "🔓 Test Root:"
+            echo "   adb shell su -c 'whoami'"
+            echo "   adb shell su -c 'id'"
             echo ""
-            echo "VPS: 159.195.6.61:5555"
-            echo "Protocol: KCP (UDP)"
+            echo "🎮 Install GameGuardian:"
+            echo "   1. Download GameGuardian APK to PC"
+            echo "   2. adb connect 159.195.6.61:5555"
+            echo "   3. adb install GameGuardian.apk"
+            echo "   4. Open Magisk app on device"
+            echo "   5. Grant root to GameGuardian"
+            echo "   6. Launch GameGuardian"
+            echo ""
+            echo "📦 Install Apps via ADB:"
+            echo "   adb install -r app.apk"
+            echo "   adb install -g app.apk  (grant permissions)"
+            echo ""
+            echo "🔧 Useful Commands:"
+            echo "   adb shell pm list packages  (list apps)"
+            echo "   adb logcat  (view logs)"
+            echo "   adb shell dumpsys activity  (activity info)"
+            echo ""
+            echo "========================================="
+            echo "VPS Address: 159.195.6.61:5555"
+            echo "Protocol: KCP (UDP) - Low Latency"
+            echo "Android: 11 | Root: Magisk | GG: Ready"
             echo "========================================="
             echo ""
             
-            # Run monitoring loop
             ./monitor.sh ${{ github.event.inputs.duration }}
 
-      - name: Upload Logs
+      - name: Upload Logs and Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: magisk-logs-${{ github.run_number }}
+          name: magisk-rooted-avd-logs-${{ github.run_number }}
           path: |
             frpc.log
             frpc.toml
