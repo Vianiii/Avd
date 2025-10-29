@@ -1,4 +1,4 @@
-name: avd-andr11-simple
+name: avd-rooted-final
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 360
     
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Enable KVM
@@ -23,7 +23,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Set up JDK 17
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -32,19 +32,17 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Free Up Disk Space
+      - name: Free Up Space
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
-          sudo apt-get clean
 
-      - name: Install FRP Client
+      - name: Install FRP
         run: |
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           sudo cp frp_0.58.1_linux_amd64/frpc /usr/local/bin/
           sudo chmod +x /usr/local/bin/frpc
-          rm -rf frp_0.58.1_linux_amd64*
 
       - name: Create FRP Config
         run: |
@@ -61,11 +59,57 @@ jobs:
           remotePort = 5555
           EOF
 
-      - name: Start FRP Tunnel
+      - name: Start FRP
         run: |
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
-          pgrep -x "frpc" && echo "✅ FRP started" || echo "❌ FRP failed"
+
+      - name: Download SuperSU
+        run: |
+          wget -q "https://github.com/phhusson/superuser/releases/download/v11/Superuser-arm64.apk" -O SuperSU.apk
+          echo "✅ SuperSU downloaded"
+
+      - name: Create Root Installation Script
+        run: |
+          cat > install_root.sh << 'SCRIPT'
+          #!/bin/bash
+          set -e
+          
+          echo "Installing root access for GameGuardian..."
+          
+          # Enable root via adb
+          adb root || true
+          sleep 3
+          adb wait-for-device
+          adb remount || true
+          sleep 2
+          
+          # Install SuperSU APK
+          adb install SuperSU.apk || true
+          sleep 3
+          
+          # Create su binary manually
+          adb shell "mkdir -p /system/xbin"
+          adb shell "echo -e '#!/system/bin/sh
+if [ "$1" = "-c" ]; then
+  shift
+  exec sh -c "$@"
+else
+  exec sh
+fi' > /system/xbin/su"
+          adb shell "chmod 06755 /system/xbin/su"
+          
+          # Also in /system/bin
+          adb shell "cp /system/xbin/su /system/bin/su"
+          adb shell "chmod 06755 /system/bin/su"
+          
+          # Symlink for compatibility
+          adb shell "ln -sf /system/xbin/su /su/bin/su" || true
+          
+          echo "✅ Root access installed"
+          SCRIPT
+          
+          chmod +x install_root.sh
 
       - name: Create Monitor Script
         run: |
@@ -76,8 +120,7 @@ jobs:
           START=$(date +%s)
           
           echo "========================================="
-          echo "Session: ${HOURS}h | Started: $(date)"
-          echo "VPS: 159.195.6.61:5555 | Protocol: KCP"
+          echo "Session: ${HOURS}h | VPS: 159.195.6.61:5555"
           echo "========================================="
           
           ITER=0
@@ -94,14 +137,14 @@ jobs:
             if [ $((ITER % 60)) -eq 0 ]; then
               DEVS=$(adb devices 2>/dev/null | grep -c "device$" || echo "0")
               FRP=$(pgrep -x "frpc" > /dev/null && echo "✅" || echo "❌")
-              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left | Devices: ${DEVS} | FRP: ${FRP}"
+              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m | Devices: ${DEVS} | FRP: ${FRP}"
             fi
             sleep 1
           done
           SCRIPT
           chmod +x monitor.sh
 
-      - name: Run Emulator
+      - name: Setup Rooted Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -113,28 +156,41 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system
           disable-animations: true
           force-avd-creation: true
+          script: ./install_root.sh
+
+      - name: Run Production Emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: default
+          arch: x86_64
+          profile: pixel_6_pro
+          ram-size: 6144M
+          disk-size: 12288M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system -memory 6144 -cores 4
+          disable-animations: true
           script: |
             echo "========================================="
-            echo "🚀 Android 11 AOSP (Native Root)"
+            echo "🚀 Android 11 with Root Access"
             echo "========================================="
             adb wait-for-device
             sleep 15
-            echo "📱 Enabling ADB TCP/IP..."
+            echo "📱 Enabling ADB TCP..."
             adb tcpip 5555
             sleep 5
             adb connect 127.0.0.1:5555
             sleep 3
             echo ""
-            echo "📊 Device Info:"
-            echo "Android: 11 | RAM: 6GB | Storage: 12GB"
-            adb shell "getprop ro.build.version.release"
-            echo ""
-            echo "🔓 Root Status:"
-            adb shell "whoami"
+            echo "🔓 Root Check:"
+            adb shell "which su" || echo "Installing su..."
+            adb shell "su -v" || true
             echo ""
             echo "========================================="
             echo "📱 Connect: adb connect 159.195.6.61:5555"
-            echo "🎮 GameGuardian: adb install GG.apk"
+            echo "🎮 Install: adb install GameGuardian.apk"
+            echo ""
+            echo "Note: GameGuardian should detect root via"
+            echo "the su binary at /system/xbin/su"
             echo "========================================="
             echo ""
             ./monitor.sh ${{ github.event.inputs.duration }}
