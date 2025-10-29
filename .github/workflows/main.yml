@@ -101,7 +101,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-30-magisk-rooted-v4
+          key: avd-30-magisk-rooted-v5
 
       - name: Prepare Rooting Script
         run: |
@@ -183,6 +183,43 @@ jobs:
             cat frpc.log
           fi
 
+      - name: Create Verification Script
+        run: |
+          cat > verify.sh << 'VERIFYSCRIPT'
+          #!/bin/bash
+          
+          echo ""
+          echo "🔐 Verifying Magisk Installation..."
+          
+          MAGISK_INSTALLED=0
+          if adb shell pm list packages | grep -q "com.topjohnwu.magisk"; then
+            echo "   ✅ Magisk App: Installed"
+            adb shell pm list packages | grep magisk
+            MAGISK_INSTALLED=1
+          else
+            echo "   ⚠️  Magisk App: Not detected"
+          fi
+          
+          echo ""
+          echo "🔓 Testing Root Access..."
+          
+          ROOT_WORKING=0
+          ROOT_TEST=$(adb shell su -c "whoami" 2>&1 || true)
+          if echo "$ROOT_TEST" | grep -q "root"; then
+            echo "   ✅ Root Access: WORKING"
+            adb shell su -c "id"
+            ROOT_WORKING=1
+          else
+            echo "   ⏳ Root Access: Pending (grant on first use)"
+            echo "   Response: $ROOT_TEST"
+          fi
+          
+          echo ""
+          return 0
+          VERIFYSCRIPT
+          
+          chmod +x verify.sh
+
       - name: Create Monitoring Script
         run: |
           cat > monitor.sh << 'MONITORSCRIPT'
@@ -222,7 +259,6 @@ jobs:
             
             ITERATION=$((ITERATION + 1))
             
-            # Status update every 60 seconds
             if [ $((ITERATION % 60)) -eq 0 ]; then
               DEVICES=$(adb devices | grep -c "5555.*device" || echo "0")
               
@@ -230,7 +266,8 @@ jobs:
               pgrep -x "frpc" > /dev/null || FRP_STATUS="❌"
               
               MAGISK_STATUS="⏳"
-              if adb shell su -c "whoami" 2>/dev/null | grep -q "root"; then
+              ROOT_CHECK=$(adb shell su -c "whoami" 2>&1 || true)
+              if echo "$ROOT_CHECK" | grep -q "root"; then
                 MAGISK_STATUS="✅"
               fi
               
@@ -264,16 +301,13 @@ jobs:
             echo "   🎮 GAMEGUARDIAN READY"
             echo "========================================="
             echo ""
-            
             adb wait-for-device
             sleep 20
-            
             echo "📱 Enabling ADB over TCP/IP..."
             adb tcpip 5555
             sleep 5
             adb connect 127.0.0.1:5555
             sleep 3
-            
             echo ""
             echo "========================================="
             echo "   📱 DEVICE SPECIFICATIONS"
@@ -285,34 +319,13 @@ jobs:
             echo "GPU: SwiftShader (Software Rendering)"
             echo "System: Writable"
             echo ""
-            
-            echo "🔐 Verifying Magisk Installation..."
-            if adb shell pm list packages | grep -q "com.topjohnwu.magisk"; then
-              echo "   ✅ Magisk App: Installed"
-              MAGISK_PKG=$(adb shell pm list packages | grep magisk)
-              echo "   Package: $MAGISK_PKG"
-            else
-              echo "   ⚠️  Magisk App: Not detected"
-              echo "   Note: May need manual installation"
-            fi
-            
-            echo ""
-            echo "🔓 Testing Root Access..."
-            if adb shell su -c "whoami" 2>/dev/null | grep -q "root"; then
-              echo "   ✅ Root Access: WORKING"
-              adb shell su -c "id"
-            else
-              echo "   ⏳ Root Access: Pending (grant on first use)"
-            fi
-            
+            ./verify.sh
             echo ""
             echo "💾 Storage Status:"
             adb shell df -h /data | grep -v Filesystem | head -1
-            
             echo ""
             echo "🧠 Memory Status:"
             adb shell cat /proc/meminfo | grep MemTotal
-            
             echo ""
             echo "========================================="
             echo "   🌐 CONNECTION INFORMATION"
@@ -337,12 +350,12 @@ jobs:
             echo ""
             echo "📦 Install Apps via ADB:"
             echo "   adb install -r app.apk"
-            echo "   adb install -g app.apk  (grant permissions)"
+            echo "   adb install -g app.apk"
             echo ""
             echo "🔧 Useful Commands:"
-            echo "   adb shell pm list packages  (list apps)"
-            echo "   adb logcat  (view logs)"
-            echo "   adb shell dumpsys activity  (activity info)"
+            echo "   adb shell pm list packages"
+            echo "   adb logcat"
+            echo "   adb shell dumpsys activity"
             echo ""
             echo "========================================="
             echo "VPS Address: 159.195.6.61:5555"
@@ -350,7 +363,6 @@ jobs:
             echo "Android: 11 | Root: Magisk | GG: Ready"
             echo "========================================="
             echo ""
-            
             ./monitor.sh ${{ github.event.inputs.duration }}
 
       - name: Upload Logs and Artifacts
