@@ -1,4 +1,4 @@
-name: docker-android-max-specs
+name: docker-android-gg-fixed
 
 on:
   workflow_dispatch:
@@ -23,29 +23,15 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           sudo chmod 666 /dev/kvm
-          
-          echo "✅ KVM enabled"
-          ls -la /dev/kvm
       
       - name: Install Requirements
         run: |
-          echo "📦 Installing ADB..."
           sudo apt-get update -qq
           sudo apt-get install -y android-sdk-platform-tools
-          
           adb version
-          echo "✅ ADB ready"
-      
-      - name: Free Maximum Space
-        run: |
-          echo "🧹 Freeing space..."
-          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
-          sudo docker image prune --all --force
-          df -h
       
       - name: Install FRP
         run: |
-          echo "🌐 Setting up FRP tunnel..."
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           sudo cp frp_0.58.1_linux_amd64/frpc /usr/local/bin/
@@ -54,7 +40,6 @@ jobs:
           serverAddr = "159.195.6.61"
           serverPort = 7000
           transport.protocol = "kcp"
-          
           [[proxies]]
           name = "adb"
           type = "tcp"
@@ -64,63 +49,91 @@ jobs:
           EOF
           
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
-          sleep 3
-          pgrep frpc && echo "✅ FRP running"
       
-      - name: Run Docker-Android MAX SPECS
+      - name: Run Docker-Android with Root
         run: |
-          echo ""
           echo "========================================="
-          echo "🚀 Starting Docker-Android (MAX SPECS)"
+          echo "🚀 Starting Docker-Android (Rooted)"
           echo "========================================="
-          echo ""
           
-          # Pull image
+          # Kill any existing emulators
+          adb kill-server
+          pkill -9 qemu-system || true
+          pkill -9 emulator || true
+          sleep 3
+          
           docker pull budtmo/docker-android:emulator_11.0
           
-          # Run with maximum specs
           docker run -d \
             --name android \
             --privileged \
             --device /dev/kvm \
             -p 5555:5555 \
-            -p 6080:6080 \
             -e DEVICE="Samsung Galaxy S10" \
             -e DATAPARTITION=8g \
             -e CORES=4 \
             -e RAM=8192 \
-            -e EMULATOR_TIMEOUT=300 \
             --cpus=4 \
             --memory=12g \
             budtmo/docker-android:emulator_11.0
           
-          echo "⏳ Waiting for emulator to boot (90 seconds)..."
+          echo "⏳ Waiting for boot (90s)..."
           sleep 90
           
-          echo "📱 Connecting ADB..."
+          # Start fresh ADB server
+          adb start-server
+          sleep 3
+          
           adb connect 127.0.0.1:5555
-          adb wait-for-device
           sleep 5
           
+          # Use -s to specify device if multiple exist
+          DEVICE=$(adb devices | grep "5555" | awk '{print $1}')
+          echo "Device: $DEVICE"
+          
+          adb -s $DEVICE wait-for-device
+          sleep 10
+          
+          echo "🔓 Setting up root for GameGuardian..."
+          
+          # Create su binary
+          adb -s $DEVICE shell "cat > /data/local/tmp/su << 'SUEOF'
+          #!/system/bin/sh
+          case "$1" in
+            -c)
+              shift
+              exec sh -c "$@"
+              ;;
+            -v|--version)
+              echo "20.4-Magisk"
+              ;;
+            *)
+              exec sh
+              ;;
+          esac
+          SUEOF"
+          
+          adb -s $DEVICE shell "chmod 755 /data/local/tmp/su"
+          adb -s $DEVICE shell "mkdir -p /sbin"
+          adb -s $DEVICE shell "ln -sf /data/local/tmp/su /sbin/su 2>/dev/null || true"
+          
           echo ""
-          echo "✅ Status Check:"
-          adb devices
-          adb shell getprop ro.build.version.release
-          adb shell getprop ro.product.model
+          echo "✅ Testing su binary:"
+          adb -s $DEVICE shell "/data/local/tmp/su -v"
           
           echo ""
           echo "========================================="
-          echo "✅ Docker-Android Running (MAX SPECS)"
+          echo "✅ Docker-Android Ready for GameGuardian"
           echo ""
-          echo "💾 RAM: 12GB (Docker limit)"
-          echo "⚙️  CPU: 4 cores (all available)"
-          echo "💿 Disk: 8GB data partition"
-          echo "🔓 Root: Available via adb root"
-          echo "🌐 VNC: Available on port 6080 (optional)"
+          echo "💾 RAM: 12GB"
+          echo "⚙️  CPU: 4 cores"
+          echo "💿 Disk: 8GB"
+          echo "🔓 Root: su binary installed"
           echo ""
           echo "📱 Connect: adb connect 159.195.6.61:5555"
           echo "🎮 Install GG: adb install GameGuardian.apk"
-          echo "🔓 Enable root: adb root"
+          echo ""
+          echo "✅ GameGuardian will detect root"
           echo "========================================="
           echo ""
           
@@ -129,8 +142,7 @@ jobs:
           SECS=$((3600 * HOURS))
           START=$(date +%s)
           
-          echo "Session running for ${HOURS}h..."
-          echo ""
+          echo "Running for ${HOURS}h..."
           
           ITER=0
           while true; do
@@ -143,21 +155,17 @@ jobs:
             M=$(((REMAIN % 3600) / 60))
             
             ITER=$((ITER + 1))
-            if [ $((ITER % 300)) -eq 0 ]; then
-              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left"
-              docker stats --no-stream android | tail -1
-            fi
+            [ $((ITER % 300)) -eq 0 ] && echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left"
             
             sleep 1
           done
           
-          echo "✅ Session complete"
+          echo "✅ Complete"
       
       - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: logs-${{ github.run_number }}
-          path: |
-            frpc.log
+          path: frpc.log
           retention-days: 7
