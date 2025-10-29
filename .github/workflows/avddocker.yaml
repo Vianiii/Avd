@@ -30,7 +30,9 @@ jobs:
 
       - name: Free Space
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
           sudo docker image prune --all --force
 
       - name: Setup FRP
@@ -39,7 +41,7 @@ jobs:
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           sudo cp frp_0.58.1_linux_amd64/frpc /tmp/frpc
           sudo chmod +x /tmp/frpc
-          cat > frpc.toml << 'EOF'
+          cat > frpc.toml << 'ENDCONFIG'
           serverAddr = "159.195.6.61"
           serverPort = 7000
           transport.protocol = "kcp"
@@ -49,7 +51,7 @@ jobs:
           localIP = "127.0.0.1"
           localPort = 5555
           remotePort = 5555
-          EOF
+          ENDCONFIG
           nohup /tmp/frpc -c frpc.toml > frpc.log 2>&1 &
 
       - name: Run Android
@@ -60,20 +62,20 @@ jobs:
           sleep 90
           adb connect 127.0.0.1:5555
           sleep 5
-          DEVICE=$(adb devices | grep 5555 | awk '{print $1}')
-          adb -s $DEVICE wait-for-device
+          MYDEVICE=$(adb devices | grep 5555 | awk '{print $1}')
+          adb -s $MYDEVICE wait-for-device
           sleep 10
-          adb -s $DEVICE shell 'cat > /data/local/tmp/su << "EOF"
-#!/system/bin/sh
-case "$1" in
-  -c) shift; exec sh -c "$@" ;;
-  -v) echo "20.4-Magisk" ;;
-  *) exec sh "$@" ;;
-esac
-EOF'
-          adb -s $DEVICE shell chmod 755 /data/local/tmp/su
-          adb -s $DEVICE shell /data/local/tmp/su -v
-          echo "READY - Connect: adb connect 159.195.6.61:5555"
+          adb -s $MYDEVICE shell "cat > /data/local/tmp/su << 'ENDSU'
+          #!/system/bin/sh
+          case "$1" in
+            -c) shift; exec sh -c "$@" ;;
+            -v) echo "20.4-Magisk" ;;
+            *) exec sh "$@" ;;
+          esac
+          ENDSU"
+          adb -s $MYDEVICE shell "chmod 755 /data/local/tmp/su"
+          adb -s $MYDEVICE shell "/data/local/tmp/su -v"
+          echo "READY - adb connect 159.195.6.61:5555"
           sleep $((3600 * ${{ inputs.duration }}))
 
       - name: Upload Logs
