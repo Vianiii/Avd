@@ -1,4 +1,4 @@
-name: avd-lineageos-prerooted
+name: avd-custom-rom-prerooted
 
 on:
   workflow_dispatch:
@@ -34,31 +34,8 @@ jobs:
 
       - name: Free Up Space
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
-          df -h
-
-      - name: Install System Requirements
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils cpu-checker
-
-      - name: Download Pre-Rooted Android x86 Image
-        run: |
-          echo "📥 Downloading Android x86 with root and browser..."
-          # Using Android-x86 which has root by default
-          wget -q "https://sourceforge.net/projects/android-x86/files/Release%2011.0/android-x86_64-11.0-r4.iso/download" -O android.iso || \
-          wget -q "https://osdn.net/projects/android-x86/downloads/73898/android-x86_64-11.0-r4.iso" -O android.iso
-          
-          echo "✅ Pre-rooted Android downloaded"
-          ls -lh android.iso
-
-      - name: Install Chrome Browser APK
-        run: |
-          echo "📥 Downloading Chrome browser..."
-          wget -q "https://dl.google.com/android/repository/sys-img/google_apis/x86_64-30_r11-linux.zip" -O chrome.zip || \
-          wget -q "https://github.com/bromite/bromite/releases/latest/download/arm64_ChromePublic.apk" -O Browser.apk
-          echo "✅ Browser downloaded"
 
       - name: Install FRP
         run: |
@@ -98,7 +75,6 @@ jobs:
           echo ""
           echo "========================================="
           echo "Session: ${HOURS}h | VPS: 159.195.6.61:5555"
-          echo "Root: Built-in (No rooting needed)"
           echo "========================================="
           echo ""
           
@@ -120,11 +96,11 @@ jobs:
           SCRIPT
           chmod +x monitor.sh
 
-      - name: Run Pre-Rooted Android Emulator
+      - name: Run Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          target: default
+          target: google_apis
           arch: x86_64
           profile: pixel_6_pro
           ram-size: 6144M
@@ -135,54 +111,37 @@ jobs:
           script: |
             echo ""
             echo "========================================="
-            echo "   🚀 Pre-Rooted Android 11"
-            echo "   🌐 Browser Included"
-            echo "   🎮 GameGuardian Ready"
+            echo "   🚀 Android 11 Emulator"
+            echo "   🔓 Root Access Ready"
+            echo "   🎮 GameGuardian Compatible"
             echo "========================================="
             echo ""
             
             adb wait-for-device
             sleep 15
             
-            # Enable root via adb
-            echo "🔓 Enabling root access..."
+            echo "🔓 Enabling root..."
             adb root
             sleep 5
             adb wait-for-device
-            adb remount
             
-            # Install browser if needed
-            if [ -f "Browser.apk" ]; then
-              echo "📦 Installing browser..."
-              adb install Browser.apk || true
-            fi
-            
-            echo "📱 Enabling ADB TCP..."
+            echo "📱 Setting up remote access..."
             adb tcpip 5555
             sleep 5
             adb connect 127.0.0.1:5555
             sleep 3
             
             echo ""
-            echo "🔓 Root Status:"
+            echo "✅ Status:"
             adb shell whoami
-            adb shell id
-            
-            echo ""
-            echo "🌐 Browser Check:"
-            adb shell pm list packages | grep -E 'chrome|browser|webview' | head -3
             
             echo ""
             echo "========================================="
             echo "📱 Connect: adb connect 159.195.6.61:5555"
+            echo "🎮 Install GG: adb install GameGuardian.apk"
             echo ""
-            echo "🌐 Launch Browser:"
-            echo "   adb shell am start -a android.intent.action.VIEW -d https://google.com"
-            echo ""
-            echo "🎮 Install GameGuardian:"
-            echo "   adb install GameGuardian.apk"
-            echo ""
-            echo "✅ AOSP has native root - GameGuardian ready"
+            echo "✅ Root: Enabled (adb root)"
+            echo "✅ Remote: Accessible via VPS"
             echo "========================================="
             echo ""
             
