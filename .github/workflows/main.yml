@@ -63,65 +63,6 @@ jobs:
         run: |
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
-          pgrep -x "frpc" && echo "✅ FRP started" || echo "⚠️ FRP may have issues"
-
-      - name: Create SU Binary Script
-        run: |
-          cat > su_binary.sh << 'SUEOF'
-          #!/system/bin/sh
-          case "$1" in
-            -c)
-              shift
-              exec sh -c "$@"
-              ;;
-            -v|--version)
-              echo "su binary v1.0 (custom)"
-              ;;
-            *)
-              exec sh
-              ;;
-          esac
-          SUEOF
-          chmod +x su_binary.sh
-
-      - name: Create Root Installation Script
-        run: |
-          cat > install_root.sh << 'ENDSCRIPT'
-          #!/bin/bash
-          set -e
-          
-          echo "========================================="
-          echo "Installing Root Access"
-          echo "========================================="
-          
-          adb root || true
-          sleep 3
-          adb wait-for-device
-          adb remount || true
-          sleep 2
-          
-          echo "Creating su binary..."
-          adb shell "mkdir -p /system/xbin"
-          adb shell "mkdir -p /system/bin"
-          
-          adb push su_binary.sh /system/xbin/su
-          adb shell "chmod 06755 /system/xbin/su"
-          
-          adb shell "cp /system/xbin/su /system/bin/su"
-          adb shell "chmod 06755 /system/bin/su"
-          
-          adb shell "mkdir -p /su/bin" || true
-          adb shell "ln -sf /system/xbin/su /su/bin/su" || true
-          
-          echo "Verifying su installation..."
-          adb shell "ls -l /system/xbin/su"
-          adb shell "ls -l /system/bin/su"
-          
-          echo "✅ Root access installed"
-          echo "========================================="
-          ENDSCRIPT
-          
-          chmod +x install_root.sh
 
       - name: Create Monitor Script
         run: |
@@ -133,8 +74,7 @@ jobs:
           
           echo ""
           echo "========================================="
-          echo "Session: ${HOURS}h | Started: $(date)"
-          echo "VPS: 159.195.6.61:5555 (KCP)"
+          echo "Session: ${HOURS}h | VPS: 159.195.6.61:5555"
           echo "========================================="
           echo ""
           
@@ -144,8 +84,7 @@ jobs:
             ELAPSED=$((NOW - START))
             
             if [ $ELAPSED -ge $SECONDS ]; then
-              echo ""
-              echo "✅ Session completed"
+              echo "✅ Done"
               break
             fi
             
@@ -158,7 +97,7 @@ jobs:
             if [ $((ITER % 60)) -eq 0 ]; then
               DEVS=$(adb devices 2>/dev/null | grep -c "device$" || echo "0")
               FRP=$(pgrep -x "frpc" > /dev/null && echo "✅" || echo "❌")
-              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m left | Devices: ${DEVS} | FRP: ${FRP}"
+              echo "[$(date '+%H:%M:%S')] ${H}h ${M}m | Dev: ${DEVS} | FRP: ${FRP}"
             fi
             
             sleep 1
@@ -167,7 +106,7 @@ jobs:
           
           chmod +x monitor.sh
 
-      - name: Setup Rooted AVD
+      - name: Run Emulator with Built-in Root
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -179,47 +118,51 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system
           disable-animations: true
           force-avd-creation: true
-          script: ./install_root.sh
-
-      - name: Run Production Emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          target: default
-          arch: x86_64
-          profile: pixel_6_pro
-          ram-size: 6144M
-          disk-size: 12288M
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -writable-system -memory 6144 -cores 4
-          disable-animations: true
           script: |
             echo ""
             echo "========================================="
-            echo "   🚀 ROOTED ANDROID 11"
-            echo "   🎮 GAMEGUARDIAN READY"
+            echo "🚀 Android 11 Emulator with ADB Root"
+            echo "🎮 GameGuardian Ready"
             echo "========================================="
             echo ""
+            
             adb wait-for-device
-            sleep 15
+            sleep 10
+            
+            echo "🔓 Enabling root access..."
+            adb root
+            sleep 5
+            adb wait-for-device
+            
             echo "📱 Enabling ADB TCP/IP..."
             adb tcpip 5555
             sleep 5
             adb connect 127.0.0.1:5555
             sleep 3
+            
             echo ""
             echo "📊 Device Info:"
-            echo "Android: 11 | RAM: 6GB | Storage: 12GB"
+            echo "Android: 11 (API 30)"
+            echo "RAM: 6GB | Storage: 12GB"
             echo ""
-            echo "🔓 Root Status:"
-            adb shell "which su" || echo "su not in PATH"
-            adb shell "ls -l /system/xbin/su" || echo "su not found"
-            adb shell "/system/xbin/su -v" || true
+            
+            echo "🔓 Root Check:"
+            adb shell "whoami"
+            adb shell "id"
             echo ""
+            
             echo "========================================="
-            echo "📱 Connect: adb connect 159.195.6.61:5555"
-            echo "🎮 Install GG: adb install GameGuardian.apk"
+            echo "📱 Connection:"
+            echo "   adb connect 159.195.6.61:5555"
+            echo ""
+            echo "🎮 Install GameGuardian:"
+            echo "   adb install GameGuardian.apk"
+            echo ""
+            echo "💡 Note: Use 'adb root' for elevated access"
+            echo "   Then: adb shell"
             echo "========================================="
             echo ""
+            
             ./monitor.sh ${{ github.event.inputs.duration }}
 
       - name: Upload Logs
