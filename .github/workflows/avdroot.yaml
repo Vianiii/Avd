@@ -1,4 +1,4 @@
-name: avd-android11-rooted-gg
+name: avd-android11-browser-rooted
 
 on:
   workflow_dispatch:
@@ -37,19 +37,19 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
 
+      - name: Download System Image with Browser
+        run: |
+          echo "📥 Downloading Android 11 with Chrome + Play Store..."
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "system-images;android-30;google_apis_playstore;x86_64"
+          echo "✅ System image with browser downloaded"
+
       - name: Download rootAVD
         run: |
-          echo "📥 Downloading rootAVD..."
+          echo "📥 Downloading rootAVD for Magisk..."
           wget -q https://gitlab.com/newbit/rootAVD/-/archive/master/rootAVD-master.tar.gz
           tar -xzf rootAVD-master.tar.gz
           chmod +x rootAVD-master/rootAVD.sh
           echo "✅ rootAVD ready"
-
-      - name: Download Aurora Store
-        run: |
-          echo "📥 Downloading Aurora Store (no Google Play)..."
-          wget -q "https://gitlab.com/AuroraOSS/AuroraStore/-/jobs/artifacts/master/raw/app/build/outputs/apk/release/AuroraStore.apk?job=buildApks" -O AuroraStore.apk
-          echo "✅ Aurora Store downloaded"
 
       - name: Install FRP
         run: |
@@ -96,7 +96,7 @@ jobs:
           while true; do
             NOW=$(date +%s)
             ELAPSED=$((NOW - START))
-            [ $ELAPSED -ge $SECS ] && echo "✅ Done" && break
+            [ $ELAPSED -ge $SECS ] && echo "✅ Complete" && break
             
             REMAIN=$((SECS - ELAPSED))
             H=$((REMAIN / 3600))
@@ -114,7 +114,7 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          target: google_apis
+          target: google_apis_playstore
           arch: x86_64
           profile: pixel_6_pro
           ram-size: 6144M
@@ -128,27 +128,31 @@ jobs:
             echo "========================================="
             
             adb wait-for-device
-            sleep 10
+            sleep 15
             
-            # Install Aurora Store
-            echo "📦 Installing Aurora Store..."
-            adb install AuroraStore.apk
+            # Verify browser is present
+            echo "📱 Checking for Chrome..."
+            adb shell pm list packages | grep chrome && echo "   ✅ Chrome installed" || echo "   ⚠️  Chrome not found"
             
             # Root with rootAVD
             echo "🔓 Installing Magisk..."
-            RAMDISK="$ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img"
+            RAMDISK="$ANDROID_HOME/system-images/android-30/google_apis_playstore/x86_64/ramdisk.img"
             
-            cd rootAVD-master
-            bash ./rootAVD.sh "$RAMDISK"
-            cd ..
-            
-            echo "✅ Magisk installed"
+            if [ -f "$RAMDISK" ]; then
+              cd rootAVD-master
+              bash ./rootAVD.sh "$RAMDISK"
+              cd ..
+              echo "✅ Magisk installed"
+            else
+              echo "❌ Ramdisk not found at: $RAMDISK"
+              exit 1
+            fi
 
-      - name: Run Rooted Emulator
+      - name: Run Rooted Emulator with Browser
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          target: google_apis
+          target: google_apis_playstore
           arch: x86_64
           profile: pixel_6_pro
           ram-size: 6144M
@@ -158,9 +162,8 @@ jobs:
           script: |
             echo ""
             echo "========================================="
-            echo "   🚀 Android 11 + Magisk Root"
+            echo "   🚀 Android 11 + Chrome + Magisk Root"
             echo "   🎮 GameGuardian Ready"
-            echo "   🛍️  Aurora Store (No Google Play)"
             echo "========================================="
             echo ""
             
@@ -174,25 +177,32 @@ jobs:
             sleep 3
             
             echo ""
-            echo "🔓 Verifying Root:"
-            adb shell pm list packages | grep magisk && echo "   ✅ Magisk installed" || echo "   ⚠️ Magisk not found"
-            adb shell "su -c 'echo Root works!'" 2>/dev/null && echo "   ✅ su binary working" || echo "   ⚠️ su not working"
+            echo "🔓 Root Status:"
+            adb shell pm list packages | grep magisk && echo "   ✅ Magisk installed" || echo "   ⚠️  Magisk not found"
+            adb shell "su -c 'echo Root works'" 2>/dev/null && echo "   ✅ su binary working" || echo "   ⚠️  su needs configuration"
             
             echo ""
-            echo "🛍️  Aurora Store Status:"
-            adb shell pm list packages | grep aurora && echo "   ✅ Aurora Store installed" || echo "   ⚠️ Not installed"
+            echo "🌐 Browser Status:"
+            adb shell pm list packages | grep chrome && echo "   ✅ Chrome installed" || echo "   ⚠️  Chrome not found"
+            
+            echo ""
+            echo "📦 Play Store Status:"
+            adb shell pm list packages | grep vending && echo "   ✅ Play Store available" || echo "   ⚠️  Play Store not found"
             
             echo ""
             echo "========================================="
             echo "📱 Connect: adb connect 159.195.6.61:5555"
             echo ""
+            echo "🌐 Launch Chrome:"
+            echo "   adb shell am start -n com.android.chrome/com.google.android.apps.chrome.Main"
+            echo ""
             echo "🎮 Install GameGuardian:"
             echo "   adb install GameGuardian.apk"
             echo ""
-            echo "🛍️  Launch Aurora Store:"
-            echo "   adb shell am start -n com.aurora.store/.MainActivity"
+            echo "📦 Launch Play Store:"
+            echo "   adb shell am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.android.vending"
             echo ""
-            echo "✅ Root is active for GameGuardian"
+            echo "✅ Chrome browser + Root access ready"
             echo "========================================="
             echo ""
             
