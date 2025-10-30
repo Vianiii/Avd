@@ -1,0 +1,65 @@
+name: root-avd-auto
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        default: '1'
+
+jobs:
+  root:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - uses: android-actions/setup-android@v3
+      
+      - name: Download System Image
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "system-images;android-30;google_apis;x86_64"
+          sdkmanager "platform-tools"
+      
+      - name: Download rootAVD
+        run: |
+          wget https://github.com/newbit1/rootAVD/archive/refs/heads/master.zip
+          unzip master.zip
+          chmod +x rootAVD-master/rootAVD.sh
+      
+      - name: Root the System Image
+        run: |
+          cd rootAVD-master
+          ./rootAVD.sh $ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img
+          
+          echo "Rooting complete!"
+      
+      - name: Package Rooted Files
+        run: |
+          cd $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
+          tar -czf ~/rooted-avd.tar.gz ramdisk.img kernel-ranchu
+          ls -lh ~/rooted-avd.tar.gz
+      
+      - name: Upload Rooted AVD
+        uses: actions/upload-artifact@v4
+        with:
+          name: rooted-avd-android11
+          path: ~/rooted-avd.tar.gz
+          retention-days: 30
+      
+      - name: Complete
+        run: |
+          echo "=========================================="
+          echo "✅ Rooted AVD Created Successfully!"
+          echo "=========================================="
+          echo ""
+          echo "Download from GitHub Actions artifacts"
+          echo "File: rooted-avd-android11"
+          echo ""
+          echo "=========================================="
