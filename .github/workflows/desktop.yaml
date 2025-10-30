@@ -23,133 +23,97 @@ jobs:
           sudo apt-get install -y xfce4 xfce4-goodies tightvncserver wget git python3 python3-pip
           sudo apt-get install -y websockify x11vnc firefox
           
-          # Setup VNC password securely
+          # Setup VNC password
           VNC_PASS="cloud123"
           mkdir -p ~/.vnc
           echo "$VNC_PASS" | vncpasswd -f > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
           
           echo "✅ System packages installed"
-          
-          # Download noVNC
+
+      - name: Download noVNC
+        run: |
           echo "Downloading noVNC..."
-          git clone --depth 1 https://github.com/novnc/noVNC.git ~/noVNC
+          cd ~
+          git clone --depth 1 https://github.com/novnc/noVNC.git
           cd ~/noVNC
           git clone --depth 1 https://github.com/novnc/websockify.git utils/websockify
           
+          # Test if python works
+          python3 --version
+          
           echo "✅ noVNC downloaded"
+          ls -la ~/noVNC/
 
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          sudo chmod 666 /dev/kvm
-          echo "✅ KVM enabled"
-
-      - name: Start Virtual Desktop
+      - name: Start Xvfb
         run: |
           echo "Starting virtual display..."
-          export DISPLAY=:1
-          
-          # Start Xvfb (virtual framebuffer)
           Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
-          XVFB_PID=$!
           sleep 3
           
-          echo "✅ Xvfb started (PID: $XVFB_PID)"
-          
-          # Start XFCE desktop
+          ps aux | grep Xvfb | grep -v grep
+          echo "✅ Xvfb started"
+
+      - name: Start XFCE
+        run: |
+          export DISPLAY=:1
           echo "Starting XFCE desktop..."
           startxfce4 > /tmp/xfce.log 2>&1 &
-          XFCE_PID=$!
           sleep 5
           
-          echo "✅ XFCE started (PID: $XFCE_PID)"
-          
-          # Verify display is working
-          ps aux | grep -E "Xvfb|xfce4" | grep -v grep
+          ps aux | grep xfce4-session | grep -v grep
+          echo "✅ XFCE started"
 
       - name: Start VNC Server
         run: |
           export DISPLAY=:1
-          echo "Starting VNC server on port 5901..."
+          echo "Starting VNC server..."
           
-          x11vnc -display :1 -rfbauth ~/.vnc/passwd -forever -shared -bg -nopw -rfbport 5901 > /tmp/vnc.log 2>&1
+          x11vnc -display :1 -rfbauth ~/.vnc/passwd -forever -shared -bg -nopw -rfbport 5901 2>&1 | head -20
           sleep 2
           
-          # Verify VNC is running
           ps aux | grep x11vnc | grep -v grep
-          netstat -tln | grep 5901 || echo "⚠️  Waiting for VNC to bind..."
+          netstat -tln | grep 5901
           
-          echo "✅ VNC server started on port 5901"
+          echo "✅ VNC server ready"
 
       - name: Start noVNC WebSocket Proxy
         run: |
-          echo "Starting noVNC on port 6080..."
+          echo "Starting noVNC websocket proxy..."
           cd ~/noVNC
           
-          nohup python3 utils/novnc_proxy --vnc localhost:5901 --listen 6080 > /tmp/novnc.log 2>&1 &
-          NOVNC_PID=$!
-          sleep 3
+          # Make sure utils/novnc_proxy is executable
+          chmod +x utils/novnc_proxy
           
-          # Verify noVNC is running
-          ps aux | grep novnc_proxy | grep -v grep
+          # Start noVNC with full output
+          nohup python3 utils/novnc_proxy \
+            --vnc 127.0.0.1:5901 \
+            --listen 6080 \
+            --web ./ > /tmp/novnc.log 2>&1 &
+          
+          sleep 5
+          
+          # Check if it started
+          ps aux | grep novnc_proxy | grep -v grep || echo "⚠️ Checking logs..."
+          
           netstat -tln | grep 6080
           
-          echo "✅ noVNC started on port 6080 (PID: $NOVNC_PID)"
+          echo "noVNC logs:"
+          tail -20 /tmp/novnc.log
+          
+          echo "✅ noVNC started"
 
-      - name: Verify All Services
+      - name: Setup FRP Tunnel
         run: |
-          echo "========== SERVICE STATUS =========="
-          echo ""
-          echo "1️⃣  Xvfb (Virtual Display):"
-          ps aux | grep "Xvfb :1" | grep -v grep || echo "❌ Not running"
+          echo "Setting up FRP tunnel..."
           
-          echo ""
-          echo "2️⃣  XFCE Desktop:"
-          ps aux | grep xfce4-session | grep -v grep || echo "❌ Not running"
-          
-          echo ""
-          echo "3️⃣  VNC Server (x11vnc):"
-          ps aux | grep x11vnc | grep -v grep || echo "❌ Not running"
-          
-          echo ""
-          echo "4️⃣  noVNC WebSocket Proxy:"
-          ps aux | grep novnc_proxy | grep -v grep || echo "❌ Not running"
-          
-          echo ""
-          echo "5️⃣  Open Ports:"
-          netstat -tln | grep -E "5901|6080"
-          
-          echo ""
-          echo "========== LOGS SUMMARY =========="
-          echo ""
-          tail -5 /tmp/xvfb.log
-          echo ""
-          tail -5 /tmp/xfce.log
-          echo ""
-          tail -5 /tmp/vnc.log
-          echo ""
-          tail -10 /tmp/novnc.log
-
-      - name: Setup FRP Tunnel (Production)
-        run: |
-          echo "Setting up FRP tunnel to VPS..."
-          
-          # Download FRP
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           
-          # Create FRP config
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
           transport.protocol = "kcp"
-          
-          # Connection settings
-          transport.dialServerTimeout = 10s
-          transport.dialServerKeepAlive = 7200s
           
           [[proxies]]
           name = "novnc-production"
@@ -157,60 +121,48 @@ jobs:
           localIP = "127.0.0.1"
           localPort = 6080
           remotePort = 6080
-          
-          # Connection settings for proxy
-          transport.useEncryption = false
-          transport.useCompression = false
           EOF
           
           # Start FRP client
-          echo "Starting FRP client..."
           nohup ./frp_0.58.1_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
-          FRP_PID=$!
           sleep 3
           
           ps aux | grep frpc | grep -v grep
           
           echo ""
           echo "=========================================="
-          echo "✅ FRP TUNNEL ACTIVE (PID: $FRP_PID)"
+          echo "✅ CLOUD DESKTOP ACTIVE"
           echo "=========================================="
           echo ""
-          echo "📱 Access Desktop:"
-          echo "   👉 http://159.195.6.61:6080/vnc.html"
+          echo "📱 Access at:"
+          echo "   http://159.195.6.61:6080/vnc.html"
           echo ""
           echo "🔐 Password: cloud123"
           echo ""
-          echo "📋 What you can do:"
-          echo "   ✅ Download Android Studio"
-          echo "   ✅ Create & Root AVD"
-          echo "   ✅ Upload files to GitHub"
-          echo "   ✅ Access full Linux desktop"
-          echo ""
           echo "=========================================="
-          echo ""
 
-      - name: Monitor Services
+      - name: Verify All Services
         run: |
-          echo "Monitoring services..."
-          for i in {1..5}; do
-            echo "Check $i: $(date)"
-            ps aux | grep -E "frpc|novnc_proxy|x11vnc" | grep -v grep | wc -l
-            echo "Services running: $?"
-            sleep 10
-          done
+          sleep 5
+          
+          echo "Service Status:"
+          echo "1. Xvfb:" && ps aux | grep Xvfb | grep -v grep || echo "❌"
+          echo "2. VNC:" && ps aux | grep x11vnc | grep -v grep || echo "❌"
+          echo "3. noVNC:" && ps aux | grep novnc_proxy | grep -v grep || echo "❌"
+          echo "4. FRP:" && ps aux | grep frpc | grep -v grep || echo "❌"
+          
+          echo ""
+          echo "Ports:"
+          netstat -tln | grep -E "5901|6080"
 
-      - name: Keep Workflow Alive
+      - name: Keep Alive
         run: |
           DURATION=${{ github.event.inputs.duration || '6' }}
           SECONDS=$((DURATION * 3600))
-          
-          echo "Workflow will run for $DURATION hours ($SECONDS seconds)"
-          echo "Sleeping..."
-          
+          echo "Running for $DURATION hours..."
           sleep $SECONDS
 
-      - name: Upload Logs (Always)
+      - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -222,13 +174,3 @@ jobs:
             /tmp/novnc.log
             frpc.log
           retention-days: 7
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up..."
-          pkill -f "Xvfb"
-          pkill -f "x11vnc"
-          pkill -f "novnc_proxy"
-          pkill -f "frpc"
-          echo "✅ Cleanup complete"
