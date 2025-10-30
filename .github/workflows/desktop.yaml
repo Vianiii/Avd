@@ -21,9 +21,8 @@ jobs:
           echo "Installing packages..."
           sudo apt-get update
           sudo apt-get install -y xfce4 xfce4-goodies tightvncserver x11vnc wget git
-          sudo apt-get install -y firefox
+          sudo apt-get install -y firefox libvirt-clients qemu-kvm
           
-          # Setup VNC password
           VNC_PASS="cloud123"
           mkdir -p ~/.vnc
           echo "$VNC_PASS" | vncpasswd -f > ~/.vnc/passwd
@@ -31,11 +30,22 @@ jobs:
           
           echo "✅ Packages installed"
 
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          sudo usermod -a -G kvm runner
+          
+          echo "Verifying KVM:"
+          ls -la /dev/kvm
+          echo "✅ KVM enabled"
+
       - name: Start Xvfb
         run: |
           Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
           sleep 3
-          ps aux | grep Xvfb | grep -v grep
           echo "✅ Xvfb started"
 
       - name: Start XFCE
@@ -48,9 +58,7 @@ jobs:
       - name: Start VNC Server
         run: |
           export DISPLAY=:1
-          echo "Starting VNC on port 5901..."
-          
-          x11vnc -display :1 -rfbauth ~/.vnc/passwd -forever -shared -bg -nopw -rfbport 5901
+          x11vnc -display :1 -rfbauth ~/.vnc/passwd -forever -shared -bg -nopw -rfbport 5901 -listen 127.0.0.1
           sleep 2
           
           ps aux | grep x11vnc | grep -v grep
@@ -62,11 +70,9 @@ jobs:
         run: |
           echo "Setting up FRP tunnel..."
           
-          # Download FRP
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           
-          # Create FRP config - forward VNC directly, not noVNC
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
@@ -80,34 +86,24 @@ jobs:
           remotePort = 5901
           EOF
           
-          # Start FRP client
           nohup ./frp_0.58.1_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
-          
-          ps aux | grep frpc | grep -v grep
           
           echo ""
           echo "=========================================="
           echo "✅ CLOUD DESKTOP READY!"
           echo "=========================================="
-          echo ""
           echo "📱 Connect via VNC Viewer:"
           echo "   Server: 159.195.6.61:5901"
           echo "   Password: cloud123"
-          echo ""
-          echo "Or use browser noVNC:"
-          echo "   1. Install noVNC on your phone"
-          echo "   2. Connect to: 159.195.6.61:5901"
-          echo ""
           echo "=========================================="
 
       - name: Keep Alive
         run: |
           DURATION=${{ github.event.inputs.duration || '6' }}
           SECONDS=$((DURATION * 3600))
-          echo "Running for $DURATION hours ($SECONDS seconds)..."
+          echo "Running for $DURATION hours..."
           
-          # Monitor services every 10 minutes
           for ((i=0; i<$((SECONDS/600)); i++)); do
             sleep 600
             echo "Still running... services: $(ps aux | grep -E 'Xvfb|x11vnc|frpc' | grep -v grep | wc -l)"
