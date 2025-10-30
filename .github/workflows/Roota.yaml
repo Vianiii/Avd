@@ -1,18 +1,25 @@
-name: root-avd-auto
+name: android
 
 on:
   workflow_dispatch:
     inputs:
       duration:
-        default: '1'
+        default: '6'
 
 jobs:
-  root:
+  run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
       
       - uses: actions/setup-java@v4
         with:
@@ -26,40 +33,70 @@ jobs:
           yes | sdkmanager --licenses
           sdkmanager "system-images;android-30;google_apis;x86_64"
           sdkmanager "platform-tools"
+          sdkmanager "emulator"
       
-      - name: Download rootAVD
+      - name: Install Pre-Rooted Files
         run: |
-          wget https://github.com/newbit1/rootAVD/archive/refs/heads/master.zip
-          unzip master.zip
-          chmod +x rootAVD-master/rootAVD.sh
-      
-      - name: Root the System Image
-        run: |
-          cd rootAVD-master
-          ./rootAVD.sh $ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img
+          wget https://github.com/Vianiii/Avd/releases/download/v1.0/rooted-avd.tar.gz
+          tar -xzf rooted-avd.tar.gz -C $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
           
-          echo "Rooting complete!"
+          echo "✅ Rooted ramdisk.img and kernel-ranchu installed!"
+          ls -lh $ANDROID_HOME/system-images/android-30/google_apis/x86_64/ | grep -E "ramdisk|kernel"
       
-      - name: Package Rooted Files
+      - name: Create AVD
         run: |
-          cd $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
-          tar -czf ~/rooted-avd.tar.gz ramdisk.img kernel-ranchu
-          ls -lh ~/rooted-avd.tar.gz
+          echo "no" | avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --force
       
-      - name: Upload Rooted AVD
+      - name: Install FRP
+        run: |
+          wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
+          tar -xzf frp_0.58.1_linux_amd64.tar.gz
+          sudo cp frp_0.58.1_linux_amd64/frpc /tmp/frpc
+          cat > frpc.toml << 'EOF'
+          serverAddr = "159.195.6.61"
+          serverPort = 7000
+          transport.protocol = "kcp"
+          [[proxies]]
+          name = "adb"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5555
+          remotePort = 5555
+          EOF
+          nohup /tmp/frpc -c frpc.toml > frpc.log 2>&1 &
+      
+      - name: Start Rooted Emulator
+        run: |
+          nohup $ANDROID_HOME/emulator/emulator -avd test -no-window -no-audio -no-snapshot-save -gpu swiftshader_indirect -memory 8192 &
+          
+          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed | tr -d "
+") ]]; do sleep 1; done'
+          sleep 30
+          
+          adb tcpip 5555
+          adb connect 127.0.0.1:5555
+          
+          echo ""
+          echo "================================================"
+          echo "✅ Rooted Android 11 Emulator Ready!"
+          echo "================================================"
+          echo ""
+          echo "📱 Connect from Termux:"
+          echo "   adb connect 159.195.6.61:5555"
+          echo ""
+          echo "🎮 Install GameGuardian:"
+          echo "   adb install GameGuardian.apk"
+          echo ""
+          echo "🔓 Root: Magisk patched ramdisk installed"
+          echo "   GameGuardian should detect root!"
+          echo ""
+          echo "================================================"
+          
+          sleep $((3600 * ${{ inputs.duration }}))
+      
+      - name: Upload Logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rooted-avd-android11
-          path: ~/rooted-avd.tar.gz
-          retention-days: 30
-      
-      - name: Complete
-        run: |
-          echo "=========================================="
-          echo "✅ Rooted AVD Created Successfully!"
-          echo "=========================================="
-          echo ""
-          echo "Download from GitHub Actions artifacts"
-          echo "File: rooted-avd-android11"
-          echo ""
-          echo "=========================================="
+          name: emulator-logs
+          path: frpc.log
