@@ -31,25 +31,53 @@ jobs:
           sdkmanager "system-images;android-30;google_apis;x86_64"
           sdkmanager "platform-tools"
           sdkmanager "emulator"
-          
-          echo "System image downloaded successfully"
-          ls -la $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
       
       - name: Install Rooted Files
         run: |
           wget https://github.com/Vianiii/Avd/releases/download/v1.0/rooted-avd.tar.gz
           tar -xzf rooted-avd.tar.gz -C $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
-          
-          echo "Rooted files installed"
           ls -la $ANDROID_HOME/system-images/android-30/google_apis/x86_64/ | grep -E "ramdisk|kernel|system"
       
-      - name: Create AVD Properly
+      - name: Create AVD Config Files
         run: |
-          echo "Creating AVD with rooted system..."
-          mkdir -p ~/.android/avd
-          echo "no" | avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --device "pixel_5" --force
+          mkdir -p ~/.android/avd/test.avd
           
-          echo "AVD created successfully"
+          cat > ~/.android/avd/test.ini << 'EOF'
+          avd.ini.encoding=UTF-8
+          path=/home/runner/.android/avd/test.avd
+          target=android-30
+          EOF
+          
+          cat > ~/.android/avd/test.avd/config.ini << 'EOF'
+          AvdId=test
+          PlayStore.enabled=false
+          abi.type=x86_64
+          hw.accelerometer=yes
+          hw.audioInput=yes
+          hw.battery=yes
+          hw.device.name=pixel_5
+          hw.dPad=yes
+          hw.gps=yes
+          hw.gpu.enabled=yes
+          hw.gpu.mode=auto
+          hw.initialOrientation=Portrait
+          hw.keyboard=yes
+          hw.lcd.density=420
+          hw.mainKeys=no
+          hw.ramSize=8192
+          hw.sdCard=yes
+          hw.sensors.orientation=yes
+          hw.sensors.proximity=yes
+          hw.touchScreen=yes
+          hw.useext4=yes
+          image.sysdir.1=system-images/android-30/google_apis/x86_64/
+          sdcard.size=512M
+          showDeviceFrame=no
+          skin.dynamic=yes
+          vm.heapSize=512
+          EOF
+          
+          echo "AVD config created"
           ls -la ~/.android/avd/
       
       - name: Setup FRP
@@ -81,33 +109,16 @@ jobs:
           sleep 30
           
           adb wait-for-device
-          
-          echo "Waiting for boot completion..."
           timeout 180 bash -c 'until adb shell getprop sys.boot_completed | grep -q 1; do sleep 2; done'
-          
           sleep 30
           
-          echo "Testing adb connection..."
-          adb devices
-          
           adb tcpip 5555
-          sleep 2
           adb connect 127.0.0.1:5555
           
-          echo ""
           echo "=========================================="
-          echo "✅ Rooted Android 11 Emulator Ready!"
+          echo "✅ Rooted Android 11 Ready!"
+          echo "adb connect 159.195.6.61:5555"
           echo "=========================================="
-          echo ""
-          echo "Connect from Termux:"
-          echo "  adb connect 159.195.6.61:5555"
-          echo ""
-          echo "Install GameGuardian:"
-          echo "  adb install GameGuardian.apk"
-          echo ""
-          echo "GameGuardian should detect Magisk root!"
-          echo "=========================================="
-          echo ""
           
           sleep 21600
       
