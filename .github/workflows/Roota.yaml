@@ -2,6 +2,82 @@ name: rooted-emulator
 
 on:
   workflow_dispatch:
+    inputs:
+      duration:
+        default: '6'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+      
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - uses: android-actions/setup-android@v3
+      
+      - name: Download System Image
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "system-images;android-30;google_apis;x86_64"
+          sdkmanager "platform-tools"
+          sdkmanager "emulator"
+      
+      - name: Replace with Rooted Files
+        run: |
+          wget https://github.com/Vianiii/Avd/releases/download/v1.0/rooted-avd.tar.gz
+          tar -xzf rooted-avd.tar.gz -C $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
+          echo "Rooted files installed"
+      
+      - name: Create AVD
+        run: |
+          echo "no" | avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --force
+      
+      - name: Setup FRP
+        run: |
+          wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
+          tar -xzf frp_0.58.1_linux_amd64.tar.gz
+          sudo cp frp_0.58.1_linux_amd64/frpc /tmp/frpc
+          cat > frpc.toml << 'EOF'
+          serverAddr = "159.195.6.61"
+          serverPort = 7000
+          transport.protocol = "kcp"
+          [[proxies]]
+          name = "adb"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5555
+          remotePort = 5555
+          EOF
+          nohup /tmp/frpc -c frpc.toml > frpc.log 2>&1 &
+      
+      - name: Start Rooted Emulator
+        run: |
+          nohup $ANDROID_HOME/emulator/emulator -avd test -no-window -no-audio -no-snapshot-save -gpu swiftshader_indirect -memory 8192 &
+          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed | tr -d "
+") ]]; do sleep 1; done'
+          sleep 30
+          adb tcpip 5555
+          adb connect 127.0.0.1:5555
+          echo "Rooted Android 11 Ready"
+          echo "Connect: adb connect 159.195.6.61:5555"
+          DURATION=${{ github.event.inputs.duration }}
+          sleep $((3600 * DURATION))name: rooted-emulator
+
+on:
+  workflow_dispatch:
 
 jobs:
   run:
@@ -69,3 +145,4 @@ jobs:
           adb connect 127.0.0.1:5555
           echo "Rooted Emulator Ready!"
           sleep 21600
+          
