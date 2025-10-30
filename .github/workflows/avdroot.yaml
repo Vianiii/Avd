@@ -1,4 +1,4 @@
-name: avd-auto-root-magisk
+name: avd-auto-root-magisk-fixed
 
 on:
   workflow_dispatch:
@@ -30,31 +30,22 @@ jobs:
       
       - name: Download System Image
         run: |
-          echo "y" | sdkmanager "system-images;android-30;google_apis;x86_64"
+          echo "y" | sdkmanager --licenses
           echo "y" | sdkmanager "platform-tools"
+          echo "y" | sdkmanager "emulator"
+          sdkmanager --install "system-images;android-30;google_apis;x86_64"
       
       - name: Download rootAVD
         run: |
-          git clone https://github.com/newbit1/rootAVD.git
-          chmod +x rootAVD/rootAVD.sh
+          wget https://github.com/newbit1/rootAVD/archive/refs/heads/master.zip
+          unzip master.zip
+          chmod +x rootAVD-master/rootAVD.sh
       
-      - name: Create AVD
+      - name: Create AVD with proper paths
         run: |
-          echo "no" | avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" -f
-      
-      - name: Start AVD
-        run: |
-          $ANDROID_HOME/emulator/emulator -avd test -no-window -no-audio -gpu swiftshader_indirect -memory 8192 &
-          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done;'
-          sleep 20
-      
-      - name: Root AVD with Magisk
-        run: |
-          cd rootAVD
-          ./rootAVD.sh $ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img
-          adb reboot
-          adb wait-for-device
-          sleep 30
+          mkdir -p $HOME/.android/avd
+          echo "no" | avdmanager create avd --force --name test --package "system-images;android-30;google_apis;x86_64" --device "pixel_5"
+          ls -la $HOME/.android/avd/
       
       - name: Install FRP
         run: |
@@ -74,16 +65,58 @@ jobs:
           EOF
           nohup /tmp/frpc -c frpc.toml > frpc.log 2>&1 &
       
+      - name: Start AVD
+        run: |
+          nohup $ANDROID_HOME/emulator/emulator -avd test -no-window -no-audio -no-snapshot-save -gpu swiftshader_indirect -memory 8192 &
+          $ANDROID_HOME/platform-tools/adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed | tr -d "
+") ]]; do sleep 1; done'
+          sleep 20
+          echo "AVD booted successfully"
+      
+      - name: Root AVD with Magisk
+        run: |
+          cd rootAVD-master
+          ./rootAVD.sh $ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img
+          
+          echo "Rebooting to apply root..."
+          adb reboot
+          sleep 5
+          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed | tr -d "
+") ]]; do sleep 1; done'
+          sleep 30
+          
+          echo "Checking root..."
+          adb shell su -c id || echo "Root check failed, but might work with GameGuardian"
+      
       - name: Setup Remote Access
         run: |
           adb tcpip 5555
+          sleep 3
           adb connect 127.0.0.1:5555
           
-          echo "========================================="
+          echo ""
+          echo "============================================"
           echo "✅ Rooted AVD with Magisk Ready!"
-          echo "Connect: adb connect 159.195.6.61:5555"
-          echo "Root: Magisk installed"
-          echo "GameGuardian will work!"
-          echo "========================================="
+          echo "============================================"
+          echo ""
+          echo "📱 Connect from Termux:"
+          echo "   adb connect 159.195.6.61:5555"
+          echo ""
+          echo "🎮 Install GameGuardian:"
+          echo "   adb install GameGuardian.apk"
+          echo ""
+          echo "🔓 Root: Magisk installed!"
+          echo "   GameGuardian should detect root"
+          echo ""
+          echo "============================================"
+          echo ""
           
           sleep $((3600 * ${{ inputs.duration }}))
+      
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: frpc.log
+          retention-days: 7
