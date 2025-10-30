@@ -7,52 +7,51 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
+    
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           sudo chmod 666 /dev/kvm
-
+      
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
+      
       - uses: android-actions/setup-android@v3
-
+      
       - name: Download System Image
         run: |
           yes | sdkmanager --licenses
           sdkmanager "system-images;android-30;google_apis;x86_64"
           sdkmanager "platform-tools"
           sdkmanager "emulator"
-
+      
       - name: Install Rooted Files
         run: |
           wget https://github.com/Vianiii/Avd/releases/download/v1.0/rooted-avd.tar.gz
           tar -xzf rooted-avd.tar.gz -C $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
           ls -lh $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
-
-      - name: Create AVD Config Files
+      
+      - name: Create AVD with avdmanager
         run: |
-          mkdir -p ~/.android/avd/test.avd
-
-          cat > ~/.android/avd/test.ini << 'EOF'
-          avd.ini.encoding=UTF-8
-          path=/home/runner/.android/avd/test.avd
-          target=android-30
-          EOF
-
+          mkdir -p ~/.android/avd
+          echo "no" | avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --force --device "pixel_5"
+          
+          echo "Listing AVD..."
+          ls -la ~/.android/avd/
+      
+      - name: Fix AVD Config (x86_64 ONLY)
+        run: |
           cat > ~/.android/avd/test.avd/config.ini << 'EOF'
           AvdId=test
           PlayStore.enabled=false
           abi.type=x86_64
-          cpu.abi=x86_64
           hw.accelerometer=yes
           hw.audioInput=yes
           hw.battery=yes
@@ -77,15 +76,20 @@ jobs:
           skin.dynamic=yes
           vm.heapSize=512
           EOF
-
-          echo "✅ AVD config created"
+          
+          echo "Config fixed:"
           cat ~/.android/avd/test.avd/config.ini
-
+      
+      - name: List AVD
+        run: |
+          $ANDROID_HOME/emulator/emulator -list-avds
+      
       - name: Setup FRP
         run: |
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           sudo cp frp_0.58.1_linux_amd64/frpc /tmp/frpc
+          
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
@@ -97,30 +101,49 @@ jobs:
           localPort = 5555
           remotePort = 5555
           EOF
+          
           nohup /tmp/frpc -c frpc.toml > frpc.log 2>&1 &
-          sleep 2
-
+          sleep 3
+      
       - name: Start Rooted Emulator
         run: |
-          nohup $ANDROID_HOME/emulator/emulator -avd test -no-window -no-audio -no-snapshot-save -gpu swiftshader_indirect -memory 8192 &
+          echo "Starting emulator..."
+          nohup $ANDROID_HOME/emulator/emulator -avd test -no-window -no-audio -no-snapshot-save -no-boot-anim -gpu swiftshader_indirect -memory 8192 &
           
-          echo "Waiting for emulator to boot..."
-          sleep 30
-          adb wait-for-device
+          sleep 40
           
-          timeout 180 bash -c 'until adb shell getprop sys.boot_completed | grep -q 1; do sleep 2; done'
-          sleep 30
+          echo "Checking if device connected..."
+          adb devices
+          
+          echo "Waiting for boot completion..."
+          timeout 240 bash -c 'while ! adb shell getprop sys.boot_completed 2>/dev/null | grep -q 1; do sleep 3; done' || true
+          
+          sleep 20
+          
+          echo "Device info:"
+          adb shell getprop ro.product.cpu.abi || true
+          adb shell getprop sys.boot_completed || true
           
           adb tcpip 5555
+          sleep 2
           adb connect 127.0.0.1:5555
           
+          echo ""
           echo "=========================================="
           echo "✅ Rooted Android 11 Ready!"
-          echo "adb connect 159.195.6.61:5555"
           echo "=========================================="
+          echo ""
+          echo "From Termux on your phone:"
+          echo "  adb connect 159.195.6.61:5555"
+          echo ""
+          echo "Install GameGuardian:"
+          echo "  adb install /storage/emulated/0/Download/GameGuardian.apk"
+          echo ""
+          echo "=========================================="
+          echo ""
           
           sleep 21600
-
+      
       - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
