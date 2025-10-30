@@ -2,9 +2,6 @@ name: rooted-emulator
 
 on:
   workflow_dispatch:
-    inputs:
-      duration:
-        default: '6'
 
 jobs:
   run:
@@ -39,7 +36,6 @@ jobs:
         run: |
           wget https://github.com/Vianiii/Avd/releases/download/v1.0/rooted-avd.tar.gz
           tar -xzf rooted-avd.tar.gz -C $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
-          echo "✅ Rooted files installed"
       
       - name: Create AVD
         run: |
@@ -69,13 +65,7 @@ jobs:
           adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed | tr -d "
 ") ]]; do sleep 1; done'
           sleep 30
-          
           adb tcpip 5555
           adb connect 127.0.0.1:5555
-          
-          echo "================================================"
-          echo "✅ Rooted Android 11 Ready!"
-          echo "adb connect 159.195.6.61:5555"
-          echo "================================================"
-          
-          sleep $((3600 * ${{ inputs.duration }}))
+          echo "Rooted Emulator Ready!"
+          sleep 21600
