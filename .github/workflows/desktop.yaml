@@ -1,4 +1,4 @@
-name: cloud-desktop-ubuntu-novnc-prod
+name: cloud-desktop-ubuntu-simple
 
 on:
   workflow_dispatch:
@@ -16,12 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install Desktop, VNC, noVNC
+      - name: Install Desktop & VNC
         run: |
-          echo "Installing system packages..."
+          echo "Installing packages..."
           sudo apt-get update
-          sudo apt-get install -y xfce4 xfce4-goodies tightvncserver wget git python3 python3-pip
-          sudo apt-get install -y websockify x11vnc firefox
+          sudo apt-get install -y xfce4 xfce4-goodies tightvncserver x11vnc wget git
+          sudo apt-get install -y firefox
           
           # Setup VNC password
           VNC_PASS="cloud123"
@@ -29,98 +29,55 @@ jobs:
           echo "$VNC_PASS" | vncpasswd -f > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
           
-          echo "✅ System packages installed"
-
-      - name: Download noVNC
-        run: |
-          echo "Downloading noVNC..."
-          cd ~
-          git clone --depth 1 https://github.com/novnc/noVNC.git
-          cd ~/noVNC
-          git clone --depth 1 https://github.com/novnc/websockify.git utils/websockify
-          
-          # Test if python works
-          python3 --version
-          
-          echo "✅ noVNC downloaded"
-          ls -la ~/noVNC/
+          echo "✅ Packages installed"
 
       - name: Start Xvfb
         run: |
-          echo "Starting virtual display..."
           Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
           sleep 3
-          
           ps aux | grep Xvfb | grep -v grep
           echo "✅ Xvfb started"
 
       - name: Start XFCE
         run: |
           export DISPLAY=:1
-          echo "Starting XFCE desktop..."
           startxfce4 > /tmp/xfce.log 2>&1 &
           sleep 5
-          
-          ps aux | grep xfce4-session | grep -v grep
           echo "✅ XFCE started"
 
       - name: Start VNC Server
         run: |
           export DISPLAY=:1
-          echo "Starting VNC server..."
+          echo "Starting VNC on port 5901..."
           
-          x11vnc -display :1 -rfbauth ~/.vnc/passwd -forever -shared -bg -nopw -rfbport 5901 2>&1 | head -20
+          x11vnc -display :1 -rfbauth ~/.vnc/passwd -forever -shared -bg -nopw -rfbport 5901
           sleep 2
           
           ps aux | grep x11vnc | grep -v grep
           netstat -tln | grep 5901
           
-          echo "✅ VNC server ready"
-
-      - name: Start noVNC WebSocket Proxy
-        run: |
-          echo "Starting noVNC websocket proxy..."
-          cd ~/noVNC
-          
-          # Make sure utils/novnc_proxy is executable
-          chmod +x utils/novnc_proxy
-          
-          # Start noVNC with full output
-          nohup python3 utils/novnc_proxy \
-            --vnc 127.0.0.1:5901 \
-            --listen 6080 \
-            --web ./ > /tmp/novnc.log 2>&1 &
-          
-          sleep 5
-          
-          # Check if it started
-          ps aux | grep novnc_proxy | grep -v grep || echo "⚠️ Checking logs..."
-          
-          netstat -tln | grep 6080
-          
-          echo "noVNC logs:"
-          tail -20 /tmp/novnc.log
-          
-          echo "✅ noVNC started"
+          echo "✅ VNC server ready on port 5901"
 
       - name: Setup FRP Tunnel
         run: |
           echo "Setting up FRP tunnel..."
           
+          # Download FRP
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           
+          # Create FRP config - forward VNC directly, not noVNC
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
           transport.protocol = "kcp"
           
           [[proxies]]
-          name = "novnc-production"
+          name = "vnc-desktop"
           type = "tcp"
           localIP = "127.0.0.1"
-          localPort = 6080
-          remotePort = 6080
+          localPort = 5901
+          remotePort = 5901
           EOF
           
           # Start FRP client
@@ -131,36 +88,30 @@ jobs:
           
           echo ""
           echo "=========================================="
-          echo "✅ CLOUD DESKTOP ACTIVE"
+          echo "✅ CLOUD DESKTOP READY!"
           echo "=========================================="
           echo ""
-          echo "📱 Access at:"
-          echo "   http://159.195.6.61:6080/vnc.html"
+          echo "📱 Connect via VNC Viewer:"
+          echo "   Server: 159.195.6.61:5901"
+          echo "   Password: cloud123"
           echo ""
-          echo "🔐 Password: cloud123"
+          echo "Or use browser noVNC:"
+          echo "   1. Install noVNC on your phone"
+          echo "   2. Connect to: 159.195.6.61:5901"
           echo ""
           echo "=========================================="
-
-      - name: Verify All Services
-        run: |
-          sleep 5
-          
-          echo "Service Status:"
-          echo "1. Xvfb:" && ps aux | grep Xvfb | grep -v grep || echo "❌"
-          echo "2. VNC:" && ps aux | grep x11vnc | grep -v grep || echo "❌"
-          echo "3. noVNC:" && ps aux | grep novnc_proxy | grep -v grep || echo "❌"
-          echo "4. FRP:" && ps aux | grep frpc | grep -v grep || echo "❌"
-          
-          echo ""
-          echo "Ports:"
-          netstat -tln | grep -E "5901|6080"
 
       - name: Keep Alive
         run: |
           DURATION=${{ github.event.inputs.duration || '6' }}
           SECONDS=$((DURATION * 3600))
-          echo "Running for $DURATION hours..."
-          sleep $SECONDS
+          echo "Running for $DURATION hours ($SECONDS seconds)..."
+          
+          # Monitor services every 10 minutes
+          for ((i=0; i<$((SECONDS/600)); i++)); do
+            sleep 600
+            echo "Still running... services: $(ps aux | grep -E 'Xvfb|x11vnc|frpc' | grep -v grep | wc -l)"
+          done
 
       - name: Upload Logs
         if: always()
@@ -170,7 +121,5 @@ jobs:
           path: |
             /tmp/xvfb.log
             /tmp/xfce.log
-            /tmp/vnc.log
-            /tmp/novnc.log
             frpc.log
           retention-days: 7
