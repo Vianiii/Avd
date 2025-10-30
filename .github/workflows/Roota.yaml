@@ -31,22 +31,33 @@ jobs:
           sdkmanager "system-images;android-30;google_apis;x86_64"
           sdkmanager "platform-tools"
           sdkmanager "emulator"
+          
+          echo "System image downloaded successfully"
+          ls -la $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
       
       - name: Install Rooted Files
         run: |
           wget https://github.com/Vianiii/Avd/releases/download/v1.0/rooted-avd.tar.gz
           tar -xzf rooted-avd.tar.gz -C $ANDROID_HOME/system-images/android-30/google_apis/x86_64/
+          
           echo "Rooted files installed"
+          ls -la $ANDROID_HOME/system-images/android-30/google_apis/x86_64/ | grep -E "ramdisk|kernel|system"
       
-      - name: Create AVD
+      - name: Create AVD Properly
         run: |
-          echo "no" | avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --force
+          echo "Creating AVD with rooted system..."
+          mkdir -p ~/.android/avd
+          echo "no" | avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --device "pixel_5" --force
+          
+          echo "AVD created successfully"
+          ls -la ~/.android/avd/
       
       - name: Setup FRP
         run: |
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           sudo cp frp_0.58.1_linux_amd64/frpc /tmp/frpc
+          
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
@@ -58,26 +69,51 @@ jobs:
           localPort = 5555
           remotePort = 5555
           EOF
+          
           nohup /tmp/frpc -c frpc.toml > frpc.log 2>&1 &
+          sleep 2
       
       - name: Start Rooted Emulator
         run: |
           nohup $ANDROID_HOME/emulator/emulator -avd test -no-window -no-audio -no-snapshot-save -gpu swiftshader_indirect -memory 8192 &
           
-          adb wait-for-device
-          sleep 10
+          echo "Waiting for emulator to boot..."
+          sleep 30
           
-          echo "Waiting for boot to complete..."
+          adb wait-for-device
+          
+          echo "Waiting for boot completion..."
           timeout 180 bash -c 'until adb shell getprop sys.boot_completed | grep -q 1; do sleep 2; done'
           
           sleep 30
           
+          echo "Testing adb connection..."
+          adb devices
+          
           adb tcpip 5555
+          sleep 2
           adb connect 127.0.0.1:5555
           
-          echo "============================================"
-          echo "Rooted Android 11 Ready!"
-          echo "Connect: adb connect 159.195.6.61:5555"
-          echo "============================================"
+          echo ""
+          echo "=========================================="
+          echo "✅ Rooted Android 11 Emulator Ready!"
+          echo "=========================================="
+          echo ""
+          echo "Connect from Termux:"
+          echo "  adb connect 159.195.6.61:5555"
+          echo ""
+          echo "Install GameGuardian:"
+          echo "  adb install GameGuardian.apk"
+          echo ""
+          echo "GameGuardian should detect Magisk root!"
+          echo "=========================================="
+          echo ""
           
           sleep 21600
+      
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: frpc.log
