@@ -1,4 +1,4 @@
-name: android-avd-vnc-NO-CLEANUP
+name: android-avd-only
 
 on:
   workflow_dispatch:
@@ -9,20 +9,13 @@ on:
         default: '6'
 
 jobs:
-  android-vnc:
+  android-avd:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install VNC & Desktop (ONLY)
-        run: |
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            x11vnc xvfb openbox dbus-x11 wget curl git default-jre-headless 2>&1 | tail -5
-          echo "✅ VNC + Desktop installed"
-
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
@@ -31,22 +24,6 @@ jobs:
           sudo chmod 666 /dev/kvm
           sudo usermod -a -G kvm runner
           echo "✅ KVM enabled"
-
-      - name: Start Xvfb & OpenBox
-        run: |
-          Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
-          sleep 3
-          export DISPLAY=:1
-          openbox > /tmp/openbox.log 2>&1 &
-          sleep 2
-          echo "✅ Display ready"
-
-      - name: Start VNC Server
-        run: |
-          export DISPLAY=:1
-          x11vnc -display :1 -forever -nopw -rfbport 5901 -bg
-          sleep 2
-          echo "✅ VNC on port 5901"
 
       - name: Setup Android SDK on /mnt (72GB!)
         run: |
@@ -81,72 +58,51 @@ jobs:
           
           mkdir -p $ANDROID_AVD_HOME
           
-          echo "Creating AVD..."
+          echo "Creating AVD with 60GB storage..."
           echo "no" | $AVDMANAGER create avd \
             -n "Pixel_6" \
             -k "system-images;android-34;google_apis;x86_64" \
             -d "pixel_6" \
-            -c 60G 2>&1 | tail -5 || true
+            -c 60G 2>&1 | tail -10 || true
           
-          echo "✅ AVD created"
+          echo ""
+          echo "✅ AVD created successfully"
 
-      - name: Start Android Emulator (VNC visible!)
+      - name: Start Android Emulator (Headless)
         run: |
-          export DISPLAY=:1
           export ANDROID_HOME=/mnt/android
           export ANDROID_AVD_HOME=/mnt/android/avd
+          export PATH=/mnt/android/emulator:/mnt/android/platform-tools:$PATH
           
           echo "Starting emulator..."
           /mnt/android/emulator/emulator -avd Pixel_6 \
             -gpu on \
+            -no-window \
             -no-snapshot \
             -memory 2048 \
             > /tmp/emulator.log 2>&1 &
           
           sleep 20
           
-          /mnt/android/platform-tools/adb devices 2>/dev/null || true
-          
-          echo "✅ Emulator running on VNC!"
+          adb devices
+          echo "✅ Emulator running (headless)"
 
-      - name: Setup FRP Tunnel
-        run: |
-          echo "Setting up FRP tunnel..."
-          wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
-          tar -xzf frp_0.58.1_linux_amd64.tar.gz
-          rm frp_0.58.1_linux_amd64.tar.gz
-          
-          cat > frpc.toml << 'EOF'
-          serverAddr = "159.195.6.61"
-          serverPort = 7000
-          transport.protocol = "kcp"
-          
-          [[proxies]]
-          name = "vnc-android"
-          type = "tcp"
-          localIP = "127.0.0.1"
-          localPort = 5901
-          remotePort = 5901
-          EOF
-          
-          nohup ./frp_0.58.1_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
-          sleep 3
-          echo "✅ FRP tunnel active"
-
-      - name: Connection Ready!
+      - name: Display Info
         run: |
           echo ""
           echo "╔════════════════════════════════════════════╗"
-          echo "║  ✅ ANDROID AVD + VNC READY!             ║"
+          echo "║  ✅ ANDROID AVD READY!                   ║"
           echo "╚════════════════════════════════════════════╝"
           echo ""
-          echo "🎮 VNC Server: 159.195.6.61:5901"
-          echo "📱 Password: (none - click Connect)"
+          echo "📱 Emulator: Running (headless)"
+          echo "💾 Storage: 60GB"
           echo ""
-          echo "💾 Storage:"
           df -h /mnt | tail -1
           echo ""
-          echo "🚀 Full 72GB available for your emulator!"
+          echo "🔧 Available commands:"
+          echo "  adb devices"
+          echo "  adb install app.apk"
+          echo "  adb shell"
           echo ""
 
       - name: Keep Alive
@@ -155,17 +111,13 @@ jobs:
           SECONDS=$((DURATION * 3600))
           for ((i=0; i<$((SECONDS/300)); i++)); do
             sleep 300
-            echo "[$((i*5)) min] Android AVD + VNC Active ✅"
+            echo "[$((i*5)) min] Android AVD Active ✅"
           done
 
       - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs
-          path: |
-            /tmp/xvfb.log
-            /tmp/openbox.log
-            /tmp/emulator.log
-            frpc.log
+          name: emulator-logs
+          path: /tmp/emulator.log
           retention-days: 7
