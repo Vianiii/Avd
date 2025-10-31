@@ -1,4 +1,4 @@
-name: android-avd-vnc-WORKING
+name: android-avd-vnc-FINAL
 
 on:
   workflow_dispatch:
@@ -62,42 +62,57 @@ jobs:
           sudo chown $(whoami):$(whoami) /mnt/android
           
           cd /mnt/android
+          
+          # Download SDK command line tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q commandlinetools-linux-*
           rm commandlinetools-linux-*.zip
           
-          # FIX: Accept licenses without using 'yes'
-          echo "" | ./cmdline-tools/bin/sdkmanager --sdk_root=/mnt/android --licenses > /dev/null 2>&1 || true
+          # List the directory structure to see what's there
+          ls -la /mnt/android/
+          ls -la /mnt/android/cmdline-tools/bin/ || echo "cmdline-tools/bin not found"
           
-          # Install SDK
-          ./cmdline-tools/bin/sdkmanager --sdk_root=/mnt/android \
+          # The downloaded zip extracts to 'cmdline-tools' folder
+          # We need to set the correct PATH
+          export SDKMANAGER=/mnt/android/cmdline-tools/bin/sdkmanager
+          
+          # Accept licenses
+          echo "" | $SDKMANAGER --sdk_root=/mnt/android --licenses > /dev/null 2>&1 || true
+          
+          # Install SDK tools
+          $SDKMANAGER --sdk_root=/mnt/android \
             "platform-tools" \
             "emulator" \
-            "system-images;android-34;google_apis;x86_64" > /dev/null 2>&1
+            "system-images;android-34;google_apis;x86_64" \
+            > /dev/null 2>&1
+          
+          # Verify installation
+          ls -la /mnt/android/emulator/ || echo "emulator not found"
           
           echo "✅ Android SDK installed (72GB available)"
 
       - name: Create Android AVD
         run: |
-          # FIX: Set PATH in THIS step, not in env
+          export SDKMANAGER=/mnt/android/cmdline-tools/bin/sdkmanager
+          export AVDMANAGER=/mnt/android/cmdline-tools/bin/avdmanager
           export ANDROID_HOME=/mnt/android
           export ANDROID_AVD_HOME=/mnt/android/avd
-          export PATH=/mnt/android/cmdline-tools/latest/bin:/mnt/android/emulator:/mnt/android/platform-tools:$PATH
           
           mkdir -p $ANDROID_AVD_HOME
           
-          # Verify avdmanager exists
-          which avdmanager || echo "avdmanager not found, using full path..."
-          /mnt/android/cmdline-tools/latest/bin/avdmanager --version
+          # Verify tools exist
+          ls -la $AVDMANAGER || echo "AVDMANAGER not found at $AVDMANAGER"
           
           # Create AVD
-          echo "no" | /mnt/android/cmdline-tools/latest/bin/avdmanager create avd \
+          echo "no" | $AVDMANAGER create avd \
             -n "Pixel_6" \
             -k "system-images;android-34;google_apis;x86_64" \
             -d "pixel_6" \
-            -c 60G 2>&1 || true
+            -c 60G 2>&1 | head -20 || true
           
-          /mnt/android/cmdline-tools/latest/bin/avdmanager list avd
+          # List AVDs
+          $AVDMANAGER list avd 2>&1 || true
+          
           echo "✅ AVD created with 60GB"
 
       - name: Start Android Emulator (VNC visible!)
@@ -105,10 +120,14 @@ jobs:
           export DISPLAY=:1
           export ANDROID_HOME=/mnt/android
           export ANDROID_AVD_HOME=/mnt/android/avd
-          export PATH=/mnt/android/emulator:/mnt/android/platform-tools:$PATH
+          export EMULATOR=/mnt/android/emulator/emulator
+          export ADB=/mnt/android/platform-tools/adb
           
-          # FIX: Use full path to emulator
-          /mnt/android/emulator/emulator -avd Pixel_6 \
+          # Verify emulator exists
+          ls -la $EMULATOR || echo "EMULATOR not found at $EMULATOR"
+          
+          # Start emulator
+          $EMULATOR -avd Pixel_6 \
             -gpu on \
             -no-snapshot \
             -memory 2048 \
@@ -117,7 +136,8 @@ jobs:
           sleep 20
           
           # Check status
-          /mnt/android/platform-tools/adb devices 2>/dev/null || true
+          $ADB devices 2>/dev/null || echo "ADB check done"
+          
           echo "✅ Emulator running on VNC!"
 
       - name: Setup FRP Tunnel
@@ -150,12 +170,10 @@ jobs:
           echo "║  ✅ ANDROID AVD + VNC READY!             ║"
           echo "╚════════════════════════════════════════════╝"
           echo ""
-          echo "🎮 VNC Server: 159.195.6.61:5901"
-          echo "📱 Android: Running with 60GB storage"
-          echo "💾 Total available: $(df -h /mnt | tail -1 | awk '{print $4}')"
+          echo "🎮 VNC: 159.195.6.61:5901 (no password)"
+          echo "📱 Android: Running with 60GB"
           echo ""
-          echo "Use adb to install apps:"
-          echo "  adb install app.apk"
+          df -h /mnt | tail -1
           echo ""
 
       - name: Keep Alive
@@ -164,7 +182,7 @@ jobs:
           SECONDS=$((DURATION * 3600))
           for ((i=0; i<$((SECONDS/300)); i++)); do
             sleep 300
-            echo "[$((i*5)) min] Android AVD + VNC Active ✅"
+            echo "[$((i*5)) min] Active ✅"
           done
 
       - name: Upload Logs
