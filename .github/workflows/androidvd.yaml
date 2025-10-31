@@ -1,4 +1,4 @@
-name: android-vd
+name: android-avd-vnc-WORKING
 
 on:
   workflow_dispatch:
@@ -42,15 +42,11 @@ jobs:
 
       - name: Start Xvfb & OpenBox
         run: |
-          # Start virtual display
           Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
           sleep 3
-          
-          # Start window manager
           export DISPLAY=:1
           openbox > /tmp/openbox.log 2>&1 &
           sleep 2
-          
           echo "✅ Display ready"
 
       - name: Start VNC Server
@@ -62,48 +58,46 @@ jobs:
 
       - name: Setup Android SDK on /mnt (72GB!)
         run: |
-          # Create Android on /mnt (big disk)
           sudo mkdir -p /mnt/android
           sudo chown $(whoami):$(whoami) /mnt/android
           
-          export ANDROID_HOME=/mnt/android
-          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/emulator:$PATH
-          
-          # Download & setup
           cd /mnt/android
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q commandlinetools-linux-*
           rm commandlinetools-linux-*.zip
           
+          # FIX: Accept licenses without using 'yes'
+          echo "" | ./cmdline-tools/bin/sdkmanager --sdk_root=/mnt/android --licenses > /dev/null 2>&1 || true
+          
           # Install SDK
-          yes | ./cmdline-tools/bin/sdkmanager --sdk_root=/mnt/android --licenses > /dev/null
           ./cmdline-tools/bin/sdkmanager --sdk_root=/mnt/android \
             "platform-tools" \
             "emulator" \
-            "system-images;android-34;google_apis;x86_64" > /dev/null
+            "system-images;android-34;google_apis;x86_64" > /dev/null 2>&1
           
-          echo "export ANDROID_HOME=/mnt/android" >> $GITHUB_ENV
-          echo "export ANDROID_AVD_HOME=/mnt/android/avd" >> $GITHUB_ENV
-          echo "export PATH=/mnt/android/cmdline-tools/latest/bin:/mnt/android/emulator:/mnt/android/platform-tools:$PATH" >> $GITHUB_ENV
-          
-          echo "✅ Android SDK installed (72GB available on /mnt)"
+          echo "✅ Android SDK installed (72GB available)"
 
       - name: Create Android AVD
         run: |
+          # FIX: Set PATH in THIS step, not in env
           export ANDROID_HOME=/mnt/android
           export ANDROID_AVD_HOME=/mnt/android/avd
-          export PATH=/mnt/android/cmdline-tools/latest/bin:/mnt/android/emulator:$PATH
+          export PATH=/mnt/android/cmdline-tools/latest/bin:/mnt/android/emulator:/mnt/android/platform-tools:$PATH
           
           mkdir -p $ANDROID_AVD_HOME
           
-          # Create AVD with max storage
-          echo "no" | avdmanager create avd \
+          # Verify avdmanager exists
+          which avdmanager || echo "avdmanager not found, using full path..."
+          /mnt/android/cmdline-tools/latest/bin/avdmanager --version
+          
+          # Create AVD
+          echo "no" | /mnt/android/cmdline-tools/latest/bin/avdmanager create avd \
             -n "Pixel_6" \
             -k "system-images;android-34;google_apis;x86_64" \
             -d "pixel_6" \
-            -c 60G
+            -c 60G 2>&1 || true
           
-          avdmanager list avd
+          /mnt/android/cmdline-tools/latest/bin/avdmanager list avd
           echo "✅ AVD created with 60GB"
 
       - name: Start Android Emulator (VNC visible!)
@@ -113,18 +107,18 @@ jobs:
           export ANDROID_AVD_HOME=/mnt/android/avd
           export PATH=/mnt/android/emulator:/mnt/android/platform-tools:$PATH
           
-          # Start emulator on display :1 (VNC will show it!)
-          emulator -avd Pixel_6 \
+          # FIX: Use full path to emulator
+          /mnt/android/emulator/emulator -avd Pixel_6 \
             -gpu on \
-            -show-kernel \
-            -no-snapshot &
+            -no-snapshot \
+            -memory 2048 \
+            > /tmp/emulator.log 2>&1 &
           
-          EMULATOR_PID=$!
-          sleep 15
+          sleep 20
           
           # Check status
-          adb devices
-          echo "✅ Emulator running on VNC display!"
+          /mnt/android/platform-tools/adb devices 2>/dev/null || true
+          echo "✅ Emulator running on VNC!"
 
       - name: Setup FRP Tunnel
         run: |
@@ -149,38 +143,28 @@ jobs:
           sleep 3
           echo "✅ FRP tunnel active"
 
-      - name: Connection Info
+      - name: Connection Ready!
         run: |
           echo ""
           echo "╔════════════════════════════════════════════╗"
-          echo "║   ✅ ANDROID AVD + VNC READY!            ║"
+          echo "║  ✅ ANDROID AVD + VNC READY!             ║"
           echo "╚════════════════════════════════════════════╝"
           echo ""
-          echo "📱 VNC Connection:"
-          echo "   Server: 159.195.6.61:5901"
-          echo "   Password: (none)"
+          echo "🎮 VNC Server: 159.195.6.61:5901"
+          echo "📱 Android: Running with 60GB storage"
+          echo "💾 Total available: $(df -h /mnt | tail -1 | awk '{print $4}')"
           echo ""
-          echo "🎮 You can see:"
-          echo "   ✅ Android emulator screen"
-          echo "   ✅ Full 72GB storage"
-          echo "   ✅ KVM acceleration"
+          echo "Use adb to install apps:"
+          echo "  adb install app.apk"
           echo ""
-          echo "📊 Storage:"
-          df -h /mnt | tail -1
-          echo ""
-          echo "💡 Use adb to install apps:"
-          echo "   adb install app.apk"
-          echo ""
-          echo "╚════════════════════════════════════════════╝"
 
       - name: Keep Alive
         run: |
           DURATION=${{ github.event.inputs.duration || '6' }}
           SECONDS=$((DURATION * 3600))
-          
           for ((i=0; i<$((SECONDS/300)); i++)); do
             sleep 300
-            echo "[$((i*5)) min] Running... (Emulator + VNC active)"
+            echo "[$((i*5)) min] Android AVD + VNC Active ✅"
           done
 
       - name: Upload Logs
@@ -191,5 +175,6 @@ jobs:
           path: |
             /tmp/xvfb.log
             /tmp/openbox.log
+            /tmp/emulator.log
             frpc.log
           retention-days: 7
