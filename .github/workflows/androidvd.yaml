@@ -1,4 +1,4 @@
-name: android-avd-vnc-FINAL
+name: android-avd-vnc-NO-CLEANUP
 
 on:
   workflow_dispatch:
@@ -16,24 +16,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Minimal Cleanup
-        run: |
-          sudo apt-get remove -y build-essential gcc g++ make gfortran 2>/dev/null
-          sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* 2>/dev/null
-          sudo find /usr/lib -name "*.a" -delete 2>/dev/null
-          sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
-          echo "✅ Freed space"
-
-      - name: Install VNC & Desktop
+      - name: Install VNC & Desktop (ONLY)
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            x11vnc xvfb openbox dbus-x11 wget curl git default-jre-headless
+            x11vnc xvfb openbox dbus-x11 wget curl git default-jre-headless 2>&1 | tail -5
           echo "✅ VNC + Desktop installed"
 
       - name: Enable KVM
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           sudo chmod 666 /dev/kvm
@@ -63,71 +55,49 @@ jobs:
           
           cd /mnt/android
           
-          # Download SDK command line tools
+          echo "Downloading SDK..."
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q commandlinetools-linux-*
           rm commandlinetools-linux-*.zip
           
-          # List the directory structure to see what's there
-          ls -la /mnt/android/
-          ls -la /mnt/android/cmdline-tools/bin/ || echo "cmdline-tools/bin not found"
-          
-          # The downloaded zip extracts to 'cmdline-tools' folder
-          # We need to set the correct PATH
+          echo "Installing SDK tools..."
           export SDKMANAGER=/mnt/android/cmdline-tools/bin/sdkmanager
           
-          # Accept licenses
           echo "" | $SDKMANAGER --sdk_root=/mnt/android --licenses > /dev/null 2>&1 || true
           
-          # Install SDK tools
           $SDKMANAGER --sdk_root=/mnt/android \
             "platform-tools" \
             "emulator" \
             "system-images;android-34;google_apis;x86_64" \
             > /dev/null 2>&1
           
-          # Verify installation
-          ls -la /mnt/android/emulator/ || echo "emulator not found"
-          
-          echo "✅ Android SDK installed (72GB available)"
+          echo "✅ Android SDK installed"
 
       - name: Create Android AVD
         run: |
-          export SDKMANAGER=/mnt/android/cmdline-tools/bin/sdkmanager
           export AVDMANAGER=/mnt/android/cmdline-tools/bin/avdmanager
           export ANDROID_HOME=/mnt/android
           export ANDROID_AVD_HOME=/mnt/android/avd
           
           mkdir -p $ANDROID_AVD_HOME
           
-          # Verify tools exist
-          ls -la $AVDMANAGER || echo "AVDMANAGER not found at $AVDMANAGER"
-          
-          # Create AVD
+          echo "Creating AVD..."
           echo "no" | $AVDMANAGER create avd \
             -n "Pixel_6" \
             -k "system-images;android-34;google_apis;x86_64" \
             -d "pixel_6" \
-            -c 60G 2>&1 | head -20 || true
+            -c 60G 2>&1 | tail -5 || true
           
-          # List AVDs
-          $AVDMANAGER list avd 2>&1 || true
-          
-          echo "✅ AVD created with 60GB"
+          echo "✅ AVD created"
 
       - name: Start Android Emulator (VNC visible!)
         run: |
           export DISPLAY=:1
           export ANDROID_HOME=/mnt/android
           export ANDROID_AVD_HOME=/mnt/android/avd
-          export EMULATOR=/mnt/android/emulator/emulator
-          export ADB=/mnt/android/platform-tools/adb
           
-          # Verify emulator exists
-          ls -la $EMULATOR || echo "EMULATOR not found at $EMULATOR"
-          
-          # Start emulator
-          $EMULATOR -avd Pixel_6 \
+          echo "Starting emulator..."
+          /mnt/android/emulator/emulator -avd Pixel_6 \
             -gpu on \
             -no-snapshot \
             -memory 2048 \
@@ -135,13 +105,13 @@ jobs:
           
           sleep 20
           
-          # Check status
-          $ADB devices 2>/dev/null || echo "ADB check done"
+          /mnt/android/platform-tools/adb devices 2>/dev/null || true
           
           echo "✅ Emulator running on VNC!"
 
       - name: Setup FRP Tunnel
         run: |
+          echo "Setting up FRP tunnel..."
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           rm frp_0.58.1_linux_amd64.tar.gz
@@ -170,10 +140,13 @@ jobs:
           echo "║  ✅ ANDROID AVD + VNC READY!             ║"
           echo "╚════════════════════════════════════════════╝"
           echo ""
-          echo "🎮 VNC: 159.195.6.61:5901 (no password)"
-          echo "📱 Android: Running with 60GB"
+          echo "🎮 VNC Server: 159.195.6.61:5901"
+          echo "📱 Password: (none - click Connect)"
           echo ""
+          echo "💾 Storage:"
           df -h /mnt | tail -1
+          echo ""
+          echo "🚀 Full 72GB available for your emulator!"
           echo ""
 
       - name: Keep Alive
@@ -182,7 +155,7 @@ jobs:
           SECONDS=$((DURATION * 3600))
           for ((i=0; i<$((SECONDS/300)); i++)); do
             sleep 300
-            echo "[$((i*5)) min] Active ✅"
+            echo "[$((i*5)) min] Android AVD + VNC Active ✅"
           done
 
       - name: Upload Logs
