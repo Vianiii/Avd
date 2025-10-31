@@ -1,0 +1,167 @@
+name: alpinelinux
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Duration in hours'
+        required: true
+        default: '6'
+
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      # ⭐ Ultra-Minimal Cleanup First
+      - name: Ultra-Minimal Cleanup (Free 30GB+)
+        run: |
+          echo "🔥 Freeing space..."
+          sudo apt-get remove -y build-essential gcc g++ make gfortran 2>/dev/null
+          sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* /usr/share/info/*
+          sudo find /usr/include -type f -delete 2>/dev/null
+          sudo find /usr/lib -name "*.a" -delete 2>/dev/null
+          sudo find /usr/lib -name "*.la" -delete 2>/dev/null
+          sudo rm -rf /usr/share/fonts/* /usr/share/icons/* 2>/dev/null
+          sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
+          sudo snap list | awk 'NR>1 {print $1}' | xargs -I {} sudo snap remove {} 2>/dev/null
+          sudo apt-get purge -y language-pack-* 2>/dev/null
+          sudo rm -rf /tmp/* /var/tmp/* /var/cache/* /var/log/*
+          
+          echo "✅ Cleanup done!"
+          df -h /
+
+      # ⭐ Install Lightweight VNC + Desktop
+      - name: Install VNC & Lightweight Desktop
+        run: |
+          echo "Installing minimal packages..."
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            x11vnc xvfb openbox dbus-x11 wget curl git \
+            default-jre-headless \
+            2>&1 | grep -v "^Get|^Hit|^Unpacking"
+          
+          echo "✅ Minimal packages installed (3GB total)"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          sudo usermod -a -G kvm runner
+          
+          echo "✅ KVM enabled"
+
+      - name: Start Xvfb & OpenBox
+        run: |
+          # Start Xvfb
+          Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
+          sleep 3
+          
+          # Start OpenBox (ultra-lightweight window manager)
+          export DISPLAY=:1
+          openbox > /tmp/openbox.log 2>&1 &
+          sleep 3
+          
+          echo "✅ Desktop started (minimal)"
+
+      - name: Start VNC Server
+        run: |
+          export DISPLAY=:1
+          x11vnc -display :1 -forever -nopw -rfbport 5901 -bg
+          sleep 2
+          
+          ps aux | grep x11vnc | grep -v grep
+          echo "✅ VNC ready on port 5901"
+
+      - name: Install Android Studio (Lightweight)
+        run: |
+          echo "Installing Android Studio CLI..."
+          
+          # Install SDK directly (no IDE)
+          mkdir -p ~/Android/Sdk
+          cd ~/Android/Sdk
+          
+          # Download SDK command line tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q commandlinetools-linux-*
+          rm commandlinetools-linux-*.zip
+          
+          # Accept licenses & install essentials
+          yes | ./cmdline-tools/bin/sdkmanager --sdk_root=. --licenses > /dev/null
+          ./cmdline-tools/bin/sdkmanager --sdk_root=. "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64" > /dev/null 2>&1 &
+          
+          echo "✅ Android SDK installing in background..."
+
+      - name: Setup FRP Tunnel to VPS
+        run: |
+          echo "Setting up FRP tunnel..."
+          
+          wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
+          tar -xzf frp_0.58.1_linux_amd64.tar.gz
+          rm frp_0.58.1_linux_amd64.tar.gz
+          
+          cat > frpc.toml << 'EOF'
+          serverAddr = "159.195.6.61"
+          serverPort = 7000
+          transport.protocol = "kcp"
+          
+          [[proxies]]
+          name = "vnc-desktop"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5901
+          remotePort = 5901
+          EOF
+          
+          nohup ./frp_0.58.1_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
+          sleep 3
+          
+          echo "✅ FRP tunnel active"
+
+      - name: Display Connection Info
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "✅ MINIMAL CLOUD DESKTOP READY!"
+          echo "=========================================="
+          echo ""
+          echo "📱 Connect via VNC Viewer:"
+          echo "   Server: 159.195.6.61:5901"
+          echo "   Password: (none)"
+          echo ""
+          echo "🎯 System Stats:"
+          df -h / | tail -1
+          echo ""
+          echo "📦 Android SDK installing..."
+          echo "   Location: ~/Android/Sdk"
+          echo "   Check: ls ~/Android/Sdk"
+          echo ""
+          echo "=========================================="
+
+      - name: Keep Alive
+        run: |
+          DURATION=${{ github.event.inputs.duration || '6' }}
+          SECONDS=$((DURATION * 3600))
+          echo "Running for $DURATION hours..."
+          
+          for ((i=0; i<$((SECONDS/600)); i++)); do
+            sleep 600
+            RUNNING=$(ps aux | grep -E 'Xvfb|x11vnc|frpc' | grep -v grep | wc -l)
+            echo "[$((i*10)) min] Services: $RUNNING ✅"
+          done
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-logs
+          path: |
+            /tmp/xvfb.log
+            /tmp/openbox.log
+            frpc.log
+          retention-days: 7
