@@ -1,4 +1,4 @@
-name: avd-rooted-complete-working
+name: avd-rooted-mnt-storage
 
 on:
   workflow_dispatch:
@@ -19,8 +19,10 @@ jobs:
 
       - name: Check Space & Enable KVM
         run: |
-          echo "📊 Initial Space:"
+          echo "📊 Initial Disk Space:"
+          echo "Root:"
           df -h / | tail -1
+          echo "Mount:"
           df -h /mnt | tail -1
           
           echo ""
@@ -32,12 +34,27 @@ jobs:
           sudo usermod -a -G kvm runner
           echo "✅ KVM enabled"
 
-      - name: Set up Java & Android SDK (Official)
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          api-level: 30
-          channels: canary
-          cache: true
+          accept-android-sdk-licenses: true
+          packages: 'system-images;android-30;google_apis;x86_64 platforms;android-30 build-tools;30.0.3'
+
+      - name: Move AVD Storage to /mnt (Fix Space Issue)
+        run: |
+          echo "📂 Creating AVD storage on /mnt (66GB available)..."
+          
+          # Create /mnt Android directory
+          sudo mkdir -p /mnt/android
+          sudo chown $(whoami):$(whoami) /mnt/android
+          
+          # Create symlink so Android tools use /mnt
+          rm -rf ~/.android
+          mkdir -p /mnt/android/.android
+          ln -s /mnt/android/.android ~/.android
+          
+          echo "✅ AVD storage moved to /mnt"
+          df -h /mnt | tail -1
 
       - name: Install FRP
         run: |
@@ -68,9 +85,9 @@ jobs:
         run: |
           nohup frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 5
-          pgrep -x "frpc" > /dev/null && echo "✅ FRP tunnel running" || echo "❌ FRP failed"
+          pgrep -x "frpc" > /dev/null && echo "✅ FRP tunnel running" || echo "⚠️  FRP check"
 
-      - name: Start Emulator & Run Session
+      - name: Start Rooted Android 11 Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -78,23 +95,23 @@ jobs:
           arch: x86_64
           profile: pixel_6_pro
           ram-size: 6144M
-          heap-size: 1024M
+          heap-size: 512M
           disk-size: 61440M
-          emulator-options: -no-window -gpu on -memory 6144 -cores 4 -writable-system
+          emulator-options: -no-window -gpu swiftshader_indirect -memory 6144 -cores 4 -writable-system -no-metrics
           disable-animations: true
           script: |
             echo "========================================="
-            echo "   🚀 ROOTED ANDROID 11 - READY!"
+            echo "   🚀 ROOTED ANDROID 11"
             echo "   💪 MAXIMUM PERFORMANCE"
             echo "========================================="
             echo ""
             
-            # Enable root access
+            # Enable root
             adb root
             adb wait-for-device
             adb remount
             
-            # Enable TCP/IP for remote connection
+            # TCP/IP
             adb tcpip 5555
             sleep 3
             adb connect 127.0.0.1:5555
@@ -109,15 +126,15 @@ jobs:
             adb shell getprop ro.build.version.release
             
             echo ""
-            echo "Build Details:"
+            echo "API Level:"
             adb shell getprop ro.build.version.sdk
             
             echo ""
             echo "Root Status:"
-            adb shell "id"
+            adb shell id
             
             echo ""
-            echo "Storage:"
+            echo "Storage (/data):"
             adb shell df -h /data | head -2
             
             echo ""
@@ -126,23 +143,25 @@ jobs:
             
             echo ""
             echo "========================================="
-            echo "   🌐 REMOTE CONNECTION"
+            echo "   🌐 REMOTE ACCESS"
             echo "========================================="
             echo ""
-            echo "📱 VPS Address: 159.195.6.61:5555"
+            echo "📍 VPS: 159.195.6.61:5555"
             echo "💻 Command: adb connect 159.195.6.61:5555"
-            echo "🔓 Root: YES (adb root already enabled)"
-            echo "📝 System: WRITABLE (adb remount done)"
+            echo "🔓 Root: YES"
+            echo "📝 System: WRITABLE"
+            echo "⚡ Protocol: KCP"
             echo ""
-            echo "========================================="
-            echo "   ⏱️  SESSION TIMER"
             echo "========================================="
             echo ""
             
-            # Session timing
+            # Session loop
             DURATION=${{ github.event.inputs.duration || '6' }}
             DURATION_SEC=$((DURATION * 3600))
             START_TIME=$(date +%s)
+            
+            echo "⏱️  Session started: $(date)"
+            echo ""
             
             ITERATION=0
             while true; do
@@ -150,40 +169,28 @@ jobs:
               ELAPSED=$((CURRENT_TIME - START_TIME))
               
               if [ $ELAPSED -ge $DURATION_SEC ]; then
-                echo "✅ Session completed successfully"
+                echo "✅ Session completed!"
                 break
               fi
               
               REMAINING=$((DURATION_SEC - ELAPSED))
               HOURS=$((REMAINING / 3600))
               MINUTES=$(((REMAINING % 3600) / 60))
-              SECONDS=$((REMAINING % 60))
               
               ITERATION=$((ITERATION + 1))
               
-              # Print status every minute
+              # Status every minute
               if [ $((ITERATION % 60)) -eq 0 ]; then
-                CONNECTED=$(adb devices | grep -c "device$" || echo "0")
-                TCP_CONNECTED=$(adb devices | grep -c "5555" || echo "0")
-                
-                echo "[$(date '+%H:%M:%S')] ⏳ ${HOURS}h ${MINUTES}m ${SECONDS}s | 📱 USB: $CONNECTED | 🌐 TCP: $TCP_CONNECTED"
+                echo "[$(date '+%H:%M:%S')] ⏳ Time remaining: ${HOURS}h ${MINUTES}m"
               fi
               
               sleep 1
             done
 
-      - name: Save Logs
-        if: always()
-        run: |
-          mkdir -p logs
-          cp frpc.log logs/ 2>/dev/null || true
-          cp frpc.toml logs/ 2>/dev/null || true
-          echo "$(date)" >> logs/session.log
-
-      - name: Upload Logs & Config
+      - name: Upload Session Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: avd-session-logs
-          path: logs/
+          name: avd-session
+          path: frpc.log
           retention-days: 7
