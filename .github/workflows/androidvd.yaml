@@ -1,4 +1,4 @@
-name: android-avd-only
+name: android-avd-only-FIXED
 
 on:
   workflow_dispatch:
@@ -72,7 +72,6 @@ jobs:
         run: |
           export ANDROID_HOME=/mnt/android
           export ANDROID_AVD_HOME=/mnt/android/avd
-          export PATH=/mnt/android/emulator:/mnt/android/platform-tools:$PATH
           
           echo "Starting emulator..."
           /mnt/android/emulator/emulator -avd Pixel_6 \
@@ -84,7 +83,8 @@ jobs:
           
           sleep 20
           
-          adb devices
+          # FIX: Use full path to adb
+          /mnt/android/platform-tools/adb devices
           echo "✅ Emulator running (headless)"
 
       - name: Display Info
@@ -100,9 +100,12 @@ jobs:
           df -h /mnt | tail -1
           echo ""
           echo "🔧 Available commands:"
-          echo "  adb devices"
-          echo "  adb install app.apk"
-          echo "  adb shell"
+          echo "  /mnt/android/platform-tools/adb devices"
+          echo "  /mnt/android/platform-tools/adb install app.apk"
+          echo "  /mnt/android/platform-tools/adb shell"
+          echo ""
+          echo "💡 Or set alias:"
+          echo "  alias adb=/mnt/android/platform-tools/adb"
           echo ""
 
       - name: Keep Alive
