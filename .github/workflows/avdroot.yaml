@@ -1,4 +1,4 @@
-name: cloud-desktop-minimal-working
+name: alpine
 
 on:
   workflow_dispatch:
