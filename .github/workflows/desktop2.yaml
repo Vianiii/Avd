@@ -1,4 +1,4 @@
-name: desktop2
+name: cloud-desktop-ubuntu-maxfree
 
 on:
   workflow_dispatch:
@@ -16,50 +16,110 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # PRE-CLEANUP: Free space first!
-      - name: Pre-Cleanup (Free 20GB)
+      # ⭐ STEP 1: NUCLEAR CLEANUP (Free 40-50GB)
+      - name: Maximum Cleanup (Free 50-60GB Space)
         run: |
-          echo "Freeing disk space..."
-          sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* 2>/dev/null
-          sudo apt-get clean
+          echo "🔥 NUCLEAR CLEANUP - FREEING 50GB+ SPACE..."
+          
+          # Remove documentation
+          sudo rm -rf /usr/share/doc/* 2>/dev/null
+          sudo rm -rf /usr/share/man/* 2>/dev/null
+          sudo rm -rf /usr/share/locale/* 2>/dev/null
+          sudo rm -rf /usr/share/backgrounds/* 2>/dev/null
+          
+          # Clean package manager
+          sudo apt-get clean 2>/dev/null
           sudo apt-get autoclean -y 2>/dev/null
-          sudo rm -rf /opt/* /var/cache/* /var/log/* /tmp/* 2>/dev/null
+          sudo apt-get autoremove -y 2>/dev/null
+          
+          # Remove /opt (old tools, etc)
+          sudo rm -rf /opt/* 2>/dev/null
+          
+          # Clean caches and logs
+          sudo rm -rf /var/cache/* 2>/dev/null
+          sudo rm -rf /var/log/* 2>/dev/null
+          sudo rm -rf /tmp/* 2>/dev/null
+          sudo mkdir -p /var/log
+          
+          # Clean user caches
+          rm -rf ~/.cache/* 2>/dev/null
+          rm -rf ~/.local/* 2>/dev/null
+          rm -rf ~/.npm/* 2>/dev/null
+          rm -rf ~/.gradle/* 2>/dev/null
+          rm -rf ~/.m2/* 2>/dev/null
+          
+          # Clean /home
+          rm -rf /home/runner/* 2>/dev/null
+          
+          echo "✅ Cleanup complete!"
+          echo ""
+          echo "📊 DISK SPACE AFTER CLEANUP:"
           df -h /
       
+      # ⭐ STEP 2: Install minimal desktop
       - name: Install Minimal Desktop & VNC
         run: |
-          echo "Installing minimal packages..."
+          echo "Installing minimal desktop packages..."
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb x11vnc wget git 2>&1 | tail -5
+          
+          # Minimal XFCE (no extras to save space)
+          sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal tightvncserver x11vnc wget git 2>&1 | tail -5
+          
+          # Optional: remove Firefox to save 1GB (uncomment if needed)
+          # sudo apt-get remove -y firefox 2>/dev/null
           
           VNC_PASS="cloud123"
           mkdir -p ~/.vnc
           echo "$VNC_PASS" | vncpasswd -f > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
           
-          echo "✅ Packages installed"
+          echo "✅ Desktop packages installed"
+          df -h /
 
-      - name: Start Xvfb
+      - name: Enable KVM (Optional - only if needed)
         run: |
-          Xvfb :1 -screen 0 1280x720x16 > /tmp/xvfb.log 2>&1 &
-          sleep 2
-          echo "✅ Xvfb started (low resolution to save space)"
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          sudo usermod -a -G kvm runner
+          
+          echo "✅ KVM enabled"
 
-      - name: Start VNC Server (No Password Auth)
+      - name: Start Xvfb (Virtual Display)
+        run: |
+          Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
+          sleep 3
+          echo "✅ Xvfb started"
+
+      - name: Start XFCE Desktop
         run: |
           export DISPLAY=:1
-          x11vnc -display :1 -forever -shared -bg -rfbport 5901 -listen 127.0.0.1 2>&1 | tee /tmp/vnc.log &
+          startxfce4 > /tmp/xfce.log 2>&1 &
+          sleep 5
+          echo "✅ XFCE started"
+
+      - name: Start VNC Server
+        run: |
+          export DISPLAY=:1
+          x11vnc -display :1 -rfbauth ~/.vnc/passwd -forever -shared -bg -rfbport 5901 -listen 127.0.0.1
           sleep 2
+          
+          ps aux | grep x11vnc | grep -v grep
+          netstat -tln | grep 5901 || echo "VNC listening on 5901"
+          
           echo "✅ VNC server ready on port 5901"
 
       - name: Setup FRP Tunnel
         run: |
           echo "Setting up FRP tunnel..."
           
+          # Download FRP
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
-          rm frp_0.58.1_linux_amd64.tar.gz  # Delete after extraction
+          rm frp_0.58.1_linux_amd64.tar.gz  # Delete to save space
           
+          # Configure FRP
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
@@ -73,6 +133,7 @@ jobs:
           remotePort = 5901
           EOF
           
+          # Start FRP
           nohup ./frp_0.58.1_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
           
@@ -84,27 +145,52 @@ jobs:
           echo "   Server: 159.195.6.61:5901"
           echo "   Password: cloud123"
           echo "=========================================="
+          echo ""
+          echo "📊 FINAL DISK SPACE:"
           df -h /
 
-      - name: Monitor Disk & Keep Alive
+      - name: Monitor & Clean During Runtime
         run: |
           DURATION=${{ github.event.inputs.duration || '6' }}
           SECONDS=$((DURATION * 3600))
           echo "Running for $DURATION hours..."
+          echo "Monitoring disk and keeping services alive..."
           
           for ((i=0; i<$((SECONDS/600)); i++)); do
             sleep 300
+            
             # Clean logs every 5 minutes to prevent disk full
             rm -rf /tmp/*.log 2>/dev/null
             sudo journalctl --vacuum-size=10M 2>/dev/null
-            echo "[$((i*5)) min] Disk: $(df / | tail -1 | awk '{print $5}')"
+            
+            # Show status
+            USED=$(df / | tail -1 | awk '{print $3}')
+            FREE=$(df / | tail -1 | awk '{print $4}')
+            PERCENT=$(df / | tail -1 | awk '{print $5}')
+            
+            echo "[$((i*5)) min] Disk: $USED used, $FREE free ($PERCENT)"
+            
+            # Verify services are still running
+            ps aux | grep -E 'Xvfb|x11vnc|frpc' | grep -v grep | wc -l
           done
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-logs
+          path: |
+            /tmp/xvfb.log
+            /tmp/xfce.log
+            frpc.log
+          retention-days: 7
 
       - name: Cleanup
         if: always()
         run: |
-          pkill -f x11vnc
-          pkill -f Xvfb
-          pkill -f frpc
-          rm -rf /tmp/* frp_*
+          echo "Shutting down services..."
+          pkill -f x11vnc || true
+          pkill -f Xvfb || true
+          pkill -f frpc || true
+          rm -rf frp_* 2>/dev/null
           echo "✅ Cleanup complete"
