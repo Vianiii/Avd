@@ -1,122 +1,122 @@
-name: avd-auto-root-magisk-fixed
+name: cloud-desktop-minimal-working
 
 on:
   workflow_dispatch:
     inputs:
       duration:
+        description: 'Duration in hours'
+        required: true
         default: '6'
 
 jobs:
-  run:
+  desktop:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
     steps:
       - uses: actions/checkout@v4
       
+      - name: Ultra-Minimal Cleanup
+        run: |
+          sudo apt-get remove -y build-essential gcc g++ make gfortran 2>/dev/null
+          sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* /usr/share/info/*
+          sudo find /usr/include -type f -delete 2>/dev/null
+          sudo find /usr/lib -name "*.a" -delete 2>/dev/null
+          sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
+          echo "✅ Cleanup done!"
+          df -h /
+
+      - name: Install VNC & Desktop
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            x11vnc xvfb openbox dbus-x11 wget curl git default-jre-headless
+          echo "✅ Installed"
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           sudo chmod 666 /dev/kvm
-      
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      
-      - uses: android-actions/setup-android@v3
-      
-      - name: Download System Image
+          sudo usermod -a -G kvm runner
+          echo "✅ KVM enabled"
+
+      - name: Start Display & VNC
         run: |
-          echo "y" | sdkmanager --licenses
-          echo "y" | sdkmanager "platform-tools"
-          echo "y" | sdkmanager "emulator"
-          sdkmanager --install "system-images;android-30;google_apis;x86_64"
-      
-      - name: Download rootAVD
+          Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
+          sleep 3
+          export DISPLAY=:1
+          openbox > /tmp/openbox.log 2>&1 &
+          sleep 2
+          x11vnc -display :1 -forever -nopw -rfbport 5901 -bg
+          sleep 2
+          echo "✅ VNC ready"
+
+      - name: Install Android SDK
         run: |
-          wget https://github.com/newbit1/rootAVD/archive/refs/heads/master.zip
-          unzip master.zip
-          chmod +x rootAVD-master/rootAVD.sh
-      
-      - name: Create AVD with proper paths
-        run: |
-          mkdir -p $HOME/.android/avd
-          echo "no" | avdmanager create avd --force --name test --package "system-images;android-30;google_apis;x86_64" --device "pixel_5"
-          ls -la $HOME/.android/avd/
-      
-      - name: Install FRP
+          mkdir -p ~/Android/Sdk
+          cd ~/Android/Sdk
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q commandlinetools-linux-*
+          rm commandlinetools-linux-*.zip
+          yes | ./cmdline-tools/bin/sdkmanager --sdk_root=. --licenses > /dev/null
+          ./cmdline-tools/bin/sdkmanager --sdk_root=. "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64" > /dev/null 2>&1 &
+          echo "✅ Android SDK installing..."
+
+      - name: Setup FRP Tunnel
         run: |
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
-          sudo cp frp_0.58.1_linux_amd64/frpc /tmp/frpc
+          rm frp_0.58.1_linux_amd64.tar.gz
+          
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
           transport.protocol = "kcp"
+          
           [[proxies]]
-          name = "adb"
+          name = "vnc-desktop"
           type = "tcp"
           localIP = "127.0.0.1"
-          localPort = 5555
-          remotePort = 5555
+          localPort = 5901
+          remotePort = 5901
           EOF
-          nohup /tmp/frpc -c frpc.toml > frpc.log 2>&1 &
-      
-      - name: Start AVD
-        run: |
-          nohup $ANDROID_HOME/emulator/emulator -avd test -no-window -no-audio -no-snapshot-save -gpu swiftshader_indirect -memory 8192 &
-          $ANDROID_HOME/platform-tools/adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed | tr -d "
-") ]]; do sleep 1; done'
-          sleep 20
-          echo "AVD booted successfully"
-      
-      - name: Root AVD with Magisk
-        run: |
-          cd rootAVD-master
-          ./rootAVD.sh $ANDROID_HOME/system-images/android-30/google_apis/x86_64/ramdisk.img
           
-          echo "Rebooting to apply root..."
-          adb reboot
-          sleep 5
-          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed | tr -d "
-") ]]; do sleep 1; done'
-          sleep 30
-          
-          echo "Checking root..."
-          adb shell su -c id || echo "Root check failed, but might work with GameGuardian"
-      
-      - name: Setup Remote Access
-        run: |
-          adb tcpip 5555
+          nohup ./frp_0.58.1_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
-          adb connect 127.0.0.1:5555
-          
+          echo "✅ FRP active"
+
+      - name: Connection Info
+        run: |
           echo ""
-          echo "============================================"
-          echo "✅ Rooted AVD with Magisk Ready!"
-          echo "============================================"
+          echo "=========================================="
+          echo "✅ MINIMAL DESKTOP READY!"
+          echo "=========================================="
           echo ""
-          echo "📱 Connect from Termux:"
-          echo "   adb connect 159.195.6.61:5555"
+          echo "📱 VNC Server: 159.195.6.61:5901"
+          echo "🔑 Password: (none)"
           echo ""
-          echo "🎮 Install GameGuardian:"
-          echo "   adb install GameGuardian.apk"
+          df -h / | tail -1
           echo ""
-          echo "🔓 Root: Magisk installed!"
-          echo "   GameGuardian should detect root"
-          echo ""
-          echo "============================================"
-          echo ""
-          
-          sleep $((3600 * ${{ inputs.duration }}))
-      
+          echo "=========================================="
+
+      - name: Keep Alive
+        run: |
+          DURATION=${{ github.event.inputs.duration || '6' }}
+          SECONDS=$((DURATION * 3600))
+          for ((i=0; i<$((SECONDS/600)); i++)); do
+            sleep 600
+            echo "[$((i*10)) min] Running..."
+          done
+
       - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ github.run_number }}
-          path: frpc.log
+          name: logs
+          path: |
+            /tmp/xvfb.log
+            /tmp/openbox.log
+            frpc.log
           retention-days: 7
