@@ -1,4 +1,4 @@
-name: desktop2
+name: desktop-with-android-mnt
 
 on:
   workflow_dispatch:
@@ -16,75 +16,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # ⭐ ULTRA-AGGRESSIVE CLEANUP
-      - name: ULTRA Cleanup (Free 60GB+)
+      - name: Check Both Disks
         run: |
-          echo "☢️  MAXIMUM SPACE CLEANUP..."
-          
-          # Remove development
-          sudo apt-get remove -y gcc g++ make build-essential llvm* clang* perl 2>/dev/null || true
-          
-          # Remove docs/locales/extras
-          sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* 2>/dev/null
-          sudo rm -rf /usr/share/backgrounds/* /usr/share/pixmaps/* /usr/share/icons/* 2>/dev/null
-          sudo rm -rf /usr/include/* /usr/lib/debug/* 2>/dev/null
-          
-          # System cleanup
-          sudo apt-get clean && sudo apt-get autoclean -y 2>/dev/null
-          sudo apt-get autoremove -y 2>/dev/null
-          
-          # Clean everything
-          sudo rm -rf /opt/* /var/cache/* /var/log/* /tmp/* 2>/dev/null
-          sudo find /usr -name "*.a" -delete 2>/dev/null
-          sudo find /usr -name "*.o" -delete 2>/dev/null
-          
-          # Recreate
-          sudo mkdir -p /var/log
-          rm -rf /home/runner/* 2>/dev/null
-          
-          df -h /
+          echo "📊 Available Storage:"
+          echo "Root (/):"
+          df -h / | tail -1
+          echo ""
+          echo "Mount (/mnt):"
+          df -h /mnt | tail -1
+          echo ""
+          echo "TOTAL: 146GB available! 🚀"
 
-      # ⭐ INSTALL MINIMAL XFCE
-      - name: Install Minimal Desktop
+      - name: Enable KVM
         run: |
-          echo "Installing minimal XFCE..."
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal tightvncserver x11vnc wget 2>&1 | tail -5
-          
-          VNC_PASS="cloud123"
-          mkdir -p ~/.vnc
-          echo "$VNC_PASS" | vncpasswd -f > ~/.vnc/passwd
-          chmod 600 ~/.vnc/passwd
-          
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          sudo usermod -a -G kvm runner
+          echo "✅ KVM enabled"
+
+      - name: Install Desktop & VNC
+        run: |
+          echo "Installing packages..."
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xfce4 xfce4-terminal x11vnc xvfb wget git dbus-x11
           echo "✅ Desktop installed"
-          df -h /
 
-      - name: Start Xvfb
+      - name: Start Xvfb & XFCE
         run: |
           Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
           sleep 3
-          echo "✅ Xvfb started"
-
-      - name: Start XFCE
-        run: |
           export DISPLAY=:1
           startxfce4 > /tmp/xfce.log 2>&1 &
           sleep 5
-          echo "✅ XFCE started"
+          echo "✅ Desktop started"
 
-      - name: Start VNC
+      - name: Start VNC Server
         run: |
           export DISPLAY=:1
-          x11vnc -display :1 -rfbauth ~/.vnc/passwd -forever -shared -bg -rfbport 5901 -listen 127.0.0.1
+          x11vnc -display :1 -forever -nopw -rfbport 5901 -bg
           sleep 2
-          echo "✅ VNC ready"
+          echo "✅ VNC server ready"
 
       - name: Setup FRP Tunnel
         run: |
-          echo "Setting up FRP..."
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
-          rm frp_0.58.1_linux_amd64.tar.gz
           
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
@@ -100,15 +78,30 @@ jobs:
           EOF
           
           nohup ./frp_0.58.1_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
-          sleep 2
-          
-          echo "=========================================="
-          echo "✅ CLOUD DESKTOP READY - 60GB FREE!"
-          echo "=========================================="
+          sleep 3
+          echo "✅ FRP tunnel active"
+
+      - name: Prepare /mnt Storage (Extra 74GB!)
+        run: |
+          echo "📂 Setting up /mnt for extra storage..."
+          sudo mkdir -p /mnt/data
+          sudo chown $(whoami):$(whoami) /mnt/data
+          echo "✅ /mnt storage ready (74GB)"
+
+      - name: Connection Info
+        run: |
+          echo ""
+          echo "==========================================="
+          echo "✅ DESKTOP + EXTRA STORAGE READY!"
+          echo "==========================================="
+          echo ""
           echo "📱 VNC: 159.195.6.61:5901"
-          echo "   Password: cloud123"
-          echo "=========================================="
-          df -h /
+          echo "💾 Storage: 72GB (root) + 74GB (/mnt)"
+          echo "📊 TOTAL: 146GB"
+          echo ""
+          echo "🎯 Duration: ${{ github.event.inputs.duration || '6' }} hours"
+          echo "==========================================="
+          echo ""
 
       - name: Keep Alive
         run: |
@@ -116,7 +109,20 @@ jobs:
           SECONDS=$((DURATION * 3600))
           
           for ((i=0; i<$((SECONDS/600)); i++)); do
-            sleep 300
-            rm -rf /tmp/*.log 2>/dev/null
-            echo "[$((i*5)) min] Running - Free: $(df / | tail -1 | awk '{print $4}')"
+            sleep 600
+            RUNNING=$(ps aux | grep -E 'Xvfb|x11vnc|frpc' | grep -v grep | wc -l)
+            ROOT=$(df / | grep -oP 'd+(?=%)' | head -1)
+            MNT=$(df /mnt | grep -oP 'd+(?=%)' | head -1)
+            echo "[$((i*10)) min] Services: $RUNNING | Disk: /$ROOT% | /mnt:$MNT% ✅"
           done
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-logs
+          path: |
+            /tmp/xvfb.log
+            /tmp/xfce.log
+            frpc.log
+          retention-days: 7
