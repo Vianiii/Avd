@@ -1,0 +1,189 @@
+name: avd-rooted-working
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Session duration in hours (max 6)'
+        required: false
+        default: '6'
+
+jobs:
+  run-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Enable KVM Hardware Acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          sudo usermod -a -G kvm runner
+          echo "✅ KVM enabled"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK (Official Action)
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 30
+
+      - name: Move SDK to /mnt for 60GB+ storage
+        run: |
+          echo "Moving Android SDK to /mnt for maximum space..."
+          
+          # The official setup puts SDK in ~/Android/Sdk
+          # We'll move it to /mnt for 70GB+ space
+          
+          sudo mkdir -p /mnt/android
+          sudo chown $(whoami):$(whoami) /mnt/android
+          
+          # Copy SDK to /mnt
+          cp -r ~/Android/Sdk /mnt/android/sdk
+          
+          # Set environment for use
+          export ANDROID_HOME=/mnt/android/sdk
+          echo "export ANDROID_HOME=/mnt/android/sdk" >> $GITHUB_ENV
+          
+          echo "✅ SDK moved to /mnt"
+          df -h /mnt | tail -1
+
+      - name: Create Rooted AVD
+        run: |
+          export ANDROID_HOME=/mnt/android/sdk
+          
+          mkdir -p ~/.android/avd
+          
+          echo "Creating rooted AVD..."
+          echo "no" | $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd \
+            -n "rooted_avd" \
+            -k "system-images;android-30;google_apis;x86_64" \
+            -d "pixel_6_pro" \
+            -c 60G \
+            2>&1 | tail -5 || true
+          
+          echo "✅ Rooted AVD created"
+
+      - name: Install FRP Client
+        run: |
+          wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
+          tar -xzf frp_0.58.1_linux_amd64.tar.gz
+          sudo cp frp_0.58.1_linux_amd64/frpc /usr/local/bin/
+          sudo chmod +x /usr/local/bin/frpc
+          rm -rf frp_0.58.1_linux_amd64*
+          echo "✅ FRP installed"
+
+      - name: Create FRP Config
+        run: |
+          cat > frpc.toml << 'EOF'
+          serverAddr = "159.195.6.61"
+          serverPort = 7000
+          transport.protocol = "kcp"
+          
+          [[proxies]]
+          name = "github-avd-adb"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5555
+          remotePort = 5555
+          EOF
+          echo "✅ FRP config ready"
+
+      - name: Start FRP Tunnel
+        run: |
+          nohup frpc -c frpc.toml > frpc.log 2>&1 &
+          sleep 5
+          echo "✅ FRP tunnel started"
+
+      - name: Start Emulator & Monitor
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6_pro
+          ram-size: 6144M
+          heap-size: 1024M
+          disk-size: 61440M
+          emulator-options: -no-window -gpu on -memory 6144 -cores 4 -writable-system
+          disable-animations: true
+          script: |
+            echo "========================================="
+            echo "   🚀 Rooted Android 11"
+            echo "   💪 MAXIMUM PERFORMANCE"
+            echo "========================================="
+            echo ""
+            
+            # Enable root
+            adb root
+            adb wait-for-device
+            adb remount
+            
+            # Enable TCP/IP
+            adb tcpip 5555
+            sleep 5
+            adb connect 127.0.0.1:5555
+            
+            echo ""
+            echo "========================================="
+            echo "   📱 Device Info"
+            echo "========================================="
+            echo "Android: 11 (API 30)"
+            echo "RAM: 6GB"
+            echo "Storage: 60GB"
+            echo "Root: ✅"
+            echo ""
+            
+            adb shell whoami
+            adb -s 127.0.0.1:5555 shell df -h /data | head -2
+            
+            echo ""
+            echo "========================================="
+            echo "   🌐 CONNECTION"
+            echo "========================================="
+            echo ""
+            echo "📱 VPS: 159.195.6.61:5555"
+            echo "💻 adb connect 159.195.6.61:5555"
+            echo ""
+            echo "========================================="
+            echo ""
+            
+            # Keep alive loop
+            DURATION=${{ github.event.inputs.duration }}
+            DURATION_SEC=$((DURATION * 3600))
+            START=$(date +%s)
+            
+            while true; do
+              NOW=$(date +%s)
+              ELAPSED=$((NOW - START))
+              
+              if [ $ELAPSED -ge $DURATION_SEC ]; then
+                echo "✅ Session ended"
+                break
+              fi
+              
+              REMAINING=$((DURATION_SEC - ELAPSED))
+              HOURS=$((REMAINING / 3600))
+              MINS=$(((REMAINING % 3600) / 60))
+              
+              echo "[$(date '+%H:%M:%S')] ⏳ ${HOURS}h ${MINS}m | $(adb devices | grep 5555 | wc -l) device(s) connected"
+              
+              sleep 300
+            done
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: avd-logs
+          path: frpc.log
+          retention-days: 7
