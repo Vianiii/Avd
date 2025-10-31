@@ -34,6 +34,15 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
+      - name: Accept Android licenses
+        run: |
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+        env:
+          ANDROID_HOME: /mnt/android-sdk
+          ANDROID_SDK_ROOT: /mnt/android-sdk
+
       - name: Run Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
