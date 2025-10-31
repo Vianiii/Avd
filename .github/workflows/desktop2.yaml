@@ -1,0 +1,110 @@
+name: desktop2
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Duration in hours'
+        required: true
+        default: '6'
+
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      # PRE-CLEANUP: Free space first!
+      - name: Pre-Cleanup (Free 20GB)
+        run: |
+          echo "Freeing disk space..."
+          sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* 2>/dev/null
+          sudo apt-get clean
+          sudo apt-get autoclean -y 2>/dev/null
+          sudo rm -rf /opt/* /var/cache/* /var/log/* /tmp/* 2>/dev/null
+          df -h /
+      
+      - name: Install Minimal Desktop & VNC
+        run: |
+          echo "Installing minimal packages..."
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb x11vnc wget git 2>&1 | tail -5
+          
+          VNC_PASS="cloud123"
+          mkdir -p ~/.vnc
+          echo "$VNC_PASS" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+          
+          echo "✅ Packages installed"
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :1 -screen 0 1280x720x16 > /tmp/xvfb.log 2>&1 &
+          sleep 2
+          echo "✅ Xvfb started (low resolution to save space)"
+
+      - name: Start VNC Server (No Password Auth)
+        run: |
+          export DISPLAY=:1
+          x11vnc -display :1 -forever -shared -bg -rfbport 5901 -listen 127.0.0.1 2>&1 | tee /tmp/vnc.log &
+          sleep 2
+          echo "✅ VNC server ready on port 5901"
+
+      - name: Setup FRP Tunnel
+        run: |
+          echo "Setting up FRP tunnel..."
+          
+          wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
+          tar -xzf frp_0.58.1_linux_amd64.tar.gz
+          rm frp_0.58.1_linux_amd64.tar.gz  # Delete after extraction
+          
+          cat > frpc.toml << 'EOF'
+          serverAddr = "159.195.6.61"
+          serverPort = 7000
+          transport.protocol = "kcp"
+          
+          [[proxies]]
+          name = "vnc-desktop"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5901
+          remotePort = 5901
+          EOF
+          
+          nohup ./frp_0.58.1_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
+          sleep 3
+          
+          echo ""
+          echo "=========================================="
+          echo "✅ CLOUD DESKTOP READY!"
+          echo "=========================================="
+          echo "📱 Connect via VNC Viewer:"
+          echo "   Server: 159.195.6.61:5901"
+          echo "   Password: cloud123"
+          echo "=========================================="
+          df -h /
+
+      - name: Monitor Disk & Keep Alive
+        run: |
+          DURATION=${{ github.event.inputs.duration || '6' }}
+          SECONDS=$((DURATION * 3600))
+          echo "Running for $DURATION hours..."
+          
+          for ((i=0; i<$((SECONDS/600)); i++)); do
+            sleep 300
+            # Clean logs every 5 minutes to prevent disk full
+            rm -rf /tmp/*.log 2>/dev/null
+            sudo journalctl --vacuum-size=10M 2>/dev/null
+            echo "[$((i*5)) min] Disk: $(df / | tail -1 | awk '{print $5}')"
+          done
+
+      - name: Cleanup
+        if: always()
+        run: |
+          pkill -f x11vnc
+          pkill -f Xvfb
+          pkill -f frpc
+          rm -rf /tmp/* frp_*
+          echo "✅ Cleanup complete"
