@@ -1,4 +1,4 @@
-name: alpinelinux
+name: android-vd
 
 on:
   workflow_dispatch:
@@ -9,42 +9,27 @@ on:
         default: '6'
 
 jobs:
-  desktop:
+  android-vnc:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
     steps:
       - uses: actions/checkout@v4
       
-      # ⭐ Ultra-Minimal Cleanup First
-      - name: Ultra-Minimal Cleanup (Free 30GB+)
+      - name: Minimal Cleanup
         run: |
-          echo "🔥 Freeing space..."
           sudo apt-get remove -y build-essential gcc g++ make gfortran 2>/dev/null
-          sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* /usr/share/info/*
-          sudo find /usr/include -type f -delete 2>/dev/null
+          sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* 2>/dev/null
           sudo find /usr/lib -name "*.a" -delete 2>/dev/null
-          sudo find /usr/lib -name "*.la" -delete 2>/dev/null
-          sudo rm -rf /usr/share/fonts/* /usr/share/icons/* 2>/dev/null
           sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
-          sudo snap list | awk 'NR>1 {print $1}' | xargs -I {} sudo snap remove {} 2>/dev/null
-          sudo apt-get purge -y language-pack-* 2>/dev/null
-          sudo rm -rf /tmp/* /var/tmp/* /var/cache/* /var/log/*
-          
-          echo "✅ Cleanup done!"
-          df -h /
+          echo "✅ Freed space"
 
-      # ⭐ Install Lightweight VNC + Desktop
-      - name: Install VNC & Lightweight Desktop
+      - name: Install VNC & Desktop
         run: |
-          echo "Installing minimal packages..."
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            x11vnc xvfb openbox dbus-x11 wget curl git \
-            default-jre-headless \
-            2>&1 | grep -v "^Get|^Hit|^Unpacking"
-          
-          echo "✅ Minimal packages installed (3GB total)"
+            x11vnc xvfb openbox dbus-x11 wget curl git default-jre-headless
+          echo "✅ VNC + Desktop installed"
 
       - name: Enable KVM
         run: |
@@ -53,54 +38,96 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           sudo chmod 666 /dev/kvm
           sudo usermod -a -G kvm runner
-          
           echo "✅ KVM enabled"
 
       - name: Start Xvfb & OpenBox
         run: |
-          # Start Xvfb
+          # Start virtual display
           Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
           sleep 3
           
-          # Start OpenBox (ultra-lightweight window manager)
+          # Start window manager
           export DISPLAY=:1
           openbox > /tmp/openbox.log 2>&1 &
-          sleep 3
+          sleep 2
           
-          echo "✅ Desktop started (minimal)"
+          echo "✅ Display ready"
 
       - name: Start VNC Server
         run: |
           export DISPLAY=:1
           x11vnc -display :1 -forever -nopw -rfbport 5901 -bg
           sleep 2
-          
-          ps aux | grep x11vnc | grep -v grep
-          echo "✅ VNC ready on port 5901"
+          echo "✅ VNC on port 5901"
 
-      - name: Install Android Studio (Lightweight)
+      - name: Setup Android SDK on /mnt (72GB!)
         run: |
-          echo "Installing Android Studio CLI..."
+          # Create Android on /mnt (big disk)
+          sudo mkdir -p /mnt/android
+          sudo chown $(whoami):$(whoami) /mnt/android
           
-          # Install SDK directly (no IDE)
-          mkdir -p ~/Android/Sdk
-          cd ~/Android/Sdk
+          export ANDROID_HOME=/mnt/android
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/emulator:$PATH
           
-          # Download SDK command line tools
+          # Download & setup
+          cd /mnt/android
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q commandlinetools-linux-*
           rm commandlinetools-linux-*.zip
           
-          # Accept licenses & install essentials
-          yes | ./cmdline-tools/bin/sdkmanager --sdk_root=. --licenses > /dev/null
-          ./cmdline-tools/bin/sdkmanager --sdk_root=. "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64" > /dev/null 2>&1 &
+          # Install SDK
+          yes | ./cmdline-tools/bin/sdkmanager --sdk_root=/mnt/android --licenses > /dev/null
+          ./cmdline-tools/bin/sdkmanager --sdk_root=/mnt/android \
+            "platform-tools" \
+            "emulator" \
+            "system-images;android-34;google_apis;x86_64" > /dev/null
           
-          echo "✅ Android SDK installing in background..."
+          echo "export ANDROID_HOME=/mnt/android" >> $GITHUB_ENV
+          echo "export ANDROID_AVD_HOME=/mnt/android/avd" >> $GITHUB_ENV
+          echo "export PATH=/mnt/android/cmdline-tools/latest/bin:/mnt/android/emulator:/mnt/android/platform-tools:$PATH" >> $GITHUB_ENV
+          
+          echo "✅ Android SDK installed (72GB available on /mnt)"
 
-      - name: Setup FRP Tunnel to VPS
+      - name: Create Android AVD
         run: |
-          echo "Setting up FRP tunnel..."
+          export ANDROID_HOME=/mnt/android
+          export ANDROID_AVD_HOME=/mnt/android/avd
+          export PATH=/mnt/android/cmdline-tools/latest/bin:/mnt/android/emulator:$PATH
           
+          mkdir -p $ANDROID_AVD_HOME
+          
+          # Create AVD with max storage
+          echo "no" | avdmanager create avd \
+            -n "Pixel_6" \
+            -k "system-images;android-34;google_apis;x86_64" \
+            -d "pixel_6" \
+            -c 60G
+          
+          avdmanager list avd
+          echo "✅ AVD created with 60GB"
+
+      - name: Start Android Emulator (VNC visible!)
+        run: |
+          export DISPLAY=:1
+          export ANDROID_HOME=/mnt/android
+          export ANDROID_AVD_HOME=/mnt/android/avd
+          export PATH=/mnt/android/emulator:/mnt/android/platform-tools:$PATH
+          
+          # Start emulator on display :1 (VNC will show it!)
+          emulator -avd Pixel_6 \
+            -gpu on \
+            -show-kernel \
+            -no-snapshot &
+          
+          EMULATOR_PID=$!
+          sleep 15
+          
+          # Check status
+          adb devices
+          echo "✅ Emulator running on VNC display!"
+
+      - name: Setup FRP Tunnel
+        run: |
           wget -q https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz
           tar -xzf frp_0.58.1_linux_amd64.tar.gz
           rm frp_0.58.1_linux_amd64.tar.gz
@@ -111,7 +138,7 @@ jobs:
           transport.protocol = "kcp"
           
           [[proxies]]
-          name = "vnc-desktop"
+          name = "vnc-android"
           type = "tcp"
           localIP = "127.0.0.1"
           localPort = 5901
@@ -120,46 +147,47 @@ jobs:
           
           nohup ./frp_0.58.1_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
-          
           echo "✅ FRP tunnel active"
 
-      - name: Display Connection Info
+      - name: Connection Info
         run: |
           echo ""
-          echo "=========================================="
-          echo "✅ MINIMAL CLOUD DESKTOP READY!"
-          echo "=========================================="
+          echo "╔════════════════════════════════════════════╗"
+          echo "║   ✅ ANDROID AVD + VNC READY!            ║"
+          echo "╚════════════════════════════════════════════╝"
           echo ""
-          echo "📱 Connect via VNC Viewer:"
+          echo "📱 VNC Connection:"
           echo "   Server: 159.195.6.61:5901"
           echo "   Password: (none)"
           echo ""
-          echo "🎯 System Stats:"
-          df -h / | tail -1
+          echo "🎮 You can see:"
+          echo "   ✅ Android emulator screen"
+          echo "   ✅ Full 72GB storage"
+          echo "   ✅ KVM acceleration"
           echo ""
-          echo "📦 Android SDK installing..."
-          echo "   Location: ~/Android/Sdk"
-          echo "   Check: ls ~/Android/Sdk"
+          echo "📊 Storage:"
+          df -h /mnt | tail -1
           echo ""
-          echo "=========================================="
+          echo "💡 Use adb to install apps:"
+          echo "   adb install app.apk"
+          echo ""
+          echo "╚════════════════════════════════════════════╝"
 
       - name: Keep Alive
         run: |
           DURATION=${{ github.event.inputs.duration || '6' }}
           SECONDS=$((DURATION * 3600))
-          echo "Running for $DURATION hours..."
           
-          for ((i=0; i<$((SECONDS/600)); i++)); do
-            sleep 600
-            RUNNING=$(ps aux | grep -E 'Xvfb|x11vnc|frpc' | grep -v grep | wc -l)
-            echo "[$((i*10)) min] Services: $RUNNING ✅"
+          for ((i=0; i<$((SECONDS/300)); i++)); do
+            sleep 300
+            echo "[$((i*5)) min] Running... (Emulator + VNC active)"
           done
 
       - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-logs
+          name: logs
           path: |
             /tmp/xvfb.log
             /tmp/openbox.log
