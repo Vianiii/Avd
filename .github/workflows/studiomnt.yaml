@@ -1,0 +1,197 @@
+name: desktop-androidstudio
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Duration in hours'
+        required: true
+        default: '6'
+
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check Both Disks
+        run: |
+          echo "📊 Available Storage:"
+          echo "Root (/):"
+          df -h / | tail -1
+          echo ""
+          echo "Mount (/mnt):"
+          df -h /mnt | tail -1
+          echo ""
+          echo "TOTAL: 146GB available! 🚀"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          sudo usermod -a -G kvm runner
+          echo "✅ KVM enabled"
+
+      - name: Install Desktop & VNC
+        run: |
+          echo "Installing packages..."
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xfce4 xfce4-terminal x11vnc xvfb wget git dbus-x11
+          echo "✅ Desktop installed"
+
+      - name: Start Xvfb & XFCE
+        run: |
+          Xvfb :1 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
+          sleep 3
+          export DISPLAY=:1
+          startxfce4 > /tmp/xfce.log 2>&1 &
+          sleep 5
+          echo "✅ Desktop started"
+
+      - name: Start VNC Server
+        run: |
+          export DISPLAY=:1
+          x11vnc -display :1 -forever -nopw -rfbport 5901 -bg
+          sleep 2
+          echo "✅ VNC server ready"
+
+      - name: Setup FRP Tunnel
+        run: |
+          wget -q https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_linux_amd64.tar.gz
+          tar -xzf frp_0.65.0_linux_amd64.tar.gz
+          
+          cat > frpc.toml << 'EOF'
+          serverAddr = "159.195.6.61"
+          serverPort = 7000
+          
+          [[proxies]]
+          name = "vnc-desktop"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5901
+          remotePort = 5901
+          EOF
+          
+          nohup ./frp_0.65.0_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
+          sleep 3
+          echo "✅ FRP tunnel active"
+
+      - name: Setup /mnt Storage & Android Environment
+        run: |
+          echo "📂 Setting up /mnt for Android development..."
+          sudo mkdir -p /mnt/data
+          sudo mkdir -p /mnt/android-sdk
+          sudo mkdir -p /mnt/android-avd
+          sudo chown -R $(whoami):$(whoami) /mnt/data /mnt/android-sdk /mnt/android-avd
+          chmod -R 755 /mnt/android-sdk /mnt/android-avd
+          
+          # Create Android environment config
+          cat >> ~/.bashrc << 'EOF'
+          # Android SDK & AVD paths on /mnt (74GB storage)
+          export ANDROID_SDK_HOME=/mnt/android-sdk
+          export ANDROID_AVD_HOME=/mnt/android-avd
+          export ANDROID_EMULATOR_HOME=/mnt/android-avd
+          export ANDROID_PREFS_ROOT=/mnt/android-sdk/.android
+          export JAVA_TOOL_OPTIONS="-Duser.home=/mnt/android-sdk"
+          EOF
+          
+          source ~/.bashrc
+          echo "✅ /mnt storage ready (74GB)"
+          echo "✅ Android environment configured to use /mnt"
+
+      - name: Download & Setup Android Studio
+        run: |
+          cd /mnt/data/
+          
+          # Download Android Studio
+          wget -q https://redirector.gstatic.com/android/studio/releases/2025.2.1.7/android-studio-2025.2.1.7-linux.tar.gz
+          tar -xzf android-studio-2025.2.1.7-linux.tar.gz
+          
+          # Download SDK Command-line Tools
+          mkdir -p /mnt/android-sdk/cmdline-tools
+          cd /mnt/android-sdk/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q commandlinetools-linux-*.zip
+          mv cmdline-tools latest
+          
+          # Download essential SDK components
+          echo "Downloading Android SDK components..."
+          /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=/mnt/android-sdk \
+            "platform-tools" \
+            "build-tools;35.0.0" \
+            "platforms;android-35" \
+            "system-images;android-35;default;x86_64" \
+            "emulator" > /tmp/sdk.log 2>&1 &
+          
+          echo "✅ Android Studio & SDK downloading in background"
+
+      - name: Create Launcher Script
+        run: |
+          cat > ~/.launch-android-studio.sh << 'EOF'
+          #!/bin/bash
+          
+          # Load Android environment
+          export ANDROID_SDK_HOME=/mnt/android-sdk
+          export ANDROID_AVD_HOME=/mnt/android-avd
+          export ANDROID_EMULATOR_HOME=/mnt/android-avd
+          export ANDROID_PREFS_ROOT=/mnt/android-sdk/.android
+          export DISPLAY=:1
+          
+          # Launch Android Studio
+          /mnt/data/android-studio/bin/studio.sh &
+          EOF
+          
+          chmod +x ~/.launch-android-studio.sh
+          echo "✅ Android Studio launcher ready"
+
+      - name: Connection Info
+        run: |
+          echo ""
+          echo "==========================================="
+          echo "✅ DESKTOP + ANDROID STUDIO READY!"
+          echo "==========================================="
+          echo ""
+          echo "📱 VNC: 159.195.6.61:5901"
+          echo "💾 Storage: 72GB (root) + 74GB (/mnt)"
+          echo "📊 TOTAL: 146GB"
+          echo ""
+          echo "🎯 Android Development:"
+          echo "  • SDK Home: /mnt/android-sdk (using 74GB)"
+          echo "  • AVD Home: /mnt/android-avd (using 74GB)"
+          echo "  • Studio: /mnt/data/android-studio"
+          echo ""
+          echo "🚀 Launch Android Studio on VNC:"
+          echo "  ~/.launch-android-studio.sh"
+          echo ""
+          echo "⏱️  Duration: ${{ github.event.inputs.duration || '6' }} hours"
+          echo "==========================================="
+          echo ""
+
+      - name: Keep Alive
+        run: |
+          DURATION=${{ github.event.inputs.duration || '6' }}
+          SECONDS=$((DURATION * 3600))
+          
+          for ((i=0; i<$((SECONDS/600)); i++)); do
+            sleep 600
+            RUNNING=$(ps aux | grep -E 'Xvfb|x11vnc|frpc|studio' | grep -v grep | wc -l)
+            ROOT=$(df / | grep -oP 'd+(?=%)' | head -1)
+            MNT=$(df /mnt | grep -oP 'd+(?=%)' | head -1)
+            echo "[$((i*10)) min] Services: $RUNNING | Disk: /$ROOT% | /mnt:$MNT% ✅"
+          done
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-logs
+          path: |
+            /tmp/xvfb.log
+            /tmp/xfce.log
+            /tmp/sdk.log
+            frpc.log
+          retention-days: 7
