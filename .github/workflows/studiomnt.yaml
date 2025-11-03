@@ -1,4 +1,4 @@
-name: desktop-with-android-mnt
+name: desktop-androidsdk
 
 on:
   workflow_dispatch:
