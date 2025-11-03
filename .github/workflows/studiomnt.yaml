@@ -1,4 +1,4 @@
-name: desktop-androidstudio
+name: desktop-with-android-mnt
 
 on:
   workflow_dispatch:
@@ -80,92 +80,68 @@ jobs:
           sleep 3
           echo "✅ FRP tunnel active"
 
-      - name: Setup /mnt Storage & Android Environment
+      - name: Setup /mnt Directories & Android Environment
         run: |
           echo "📂 Setting up /mnt for Android development..."
+          
+          # Create Android directories
           sudo mkdir -p /mnt/data
           sudo mkdir -p /mnt/android-sdk
           sudo mkdir -p /mnt/android-avd
           sudo chown -R $(whoami):$(whoami) /mnt/data /mnt/android-sdk /mnt/android-avd
           chmod -R 755 /mnt/android-sdk /mnt/android-avd
           
-          # Create Android environment config
+          # Create Android Studio configuration file
+          mkdir -p ~/.android
+          cat > ~/.android/studio.vmoptions << 'EOF'
+          -Duser.home=/mnt/android-sdk
+          -Dandroid.sdk.home=/mnt/android-sdk
+          -Dandroid.avdmanager.home=/mnt/android-avd
+          EOF
+          
+          # Set environment variables in ~/.bashrc for persistent use
           cat >> ~/.bashrc << 'EOF'
-          # Android SDK & AVD paths on /mnt (74GB storage)
+          # Android SDK & AVD paths - ALL on /mnt (74GB)
           export ANDROID_SDK_HOME=/mnt/android-sdk
           export ANDROID_AVD_HOME=/mnt/android-avd
           export ANDROID_EMULATOR_HOME=/mnt/android-avd
           export ANDROID_PREFS_ROOT=/mnt/android-sdk/.android
-          export JAVA_TOOL_OPTIONS="-Duser.home=/mnt/android-sdk"
+          export PATH=/mnt/android-sdk/cmdline-tools/latest/bin:$PATH
+          export PATH=/mnt/android-sdk/emulator:$PATH
           EOF
           
           source ~/.bashrc
+          
           echo "✅ /mnt storage ready (74GB)"
-          echo "✅ Android environment configured to use /mnt"
-
-      - name: Download & Setup Android Studio
-        run: |
-          cd /mnt/data/
-          
-          # Download Android Studio
-          wget -q https://redirector.gstatic.com/android/studio/releases/2025.2.1.7/android-studio-2025.2.1.7-linux.tar.gz
-          tar -xzf android-studio-2025.2.1.7-linux.tar.gz
-          
-          # Download SDK Command-line Tools
-          mkdir -p /mnt/android-sdk/cmdline-tools
-          cd /mnt/android-sdk/cmdline-tools
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-*.zip
-          mv cmdline-tools latest
-          
-          # Download essential SDK components
-          echo "Downloading Android SDK components..."
-          /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=/mnt/android-sdk \
-            "platform-tools" \
-            "build-tools;35.0.0" \
-            "platforms;android-35" \
-            "system-images;android-35;default;x86_64" \
-            "emulator" > /tmp/sdk.log 2>&1 &
-          
-          echo "✅ Android Studio & SDK downloading in background"
-
-      - name: Create Launcher Script
-        run: |
-          cat > ~/.launch-android-studio.sh << 'EOF'
-          #!/bin/bash
-          
-          # Load Android environment
-          export ANDROID_SDK_HOME=/mnt/android-sdk
-          export ANDROID_AVD_HOME=/mnt/android-avd
-          export ANDROID_EMULATOR_HOME=/mnt/android-avd
-          export ANDROID_PREFS_ROOT=/mnt/android-sdk/.android
-          export DISPLAY=:1
-          
-          # Launch Android Studio
-          /mnt/data/android-studio/bin/studio.sh &
-          EOF
-          
-          chmod +x ~/.launch-android-studio.sh
-          echo "✅ Android Studio launcher ready"
+          echo "✅ Android Studio will default to /mnt/android-sdk"
+          echo "✅ AVD storage: /mnt/android-avd"
+          echo ""
+          echo "📋 Environment Variables Set:"
+          echo "  ANDROID_SDK_HOME=/mnt/android-sdk"
+          echo "  ANDROID_AVD_HOME=/mnt/android-avd"
+          echo "  ANDROID_EMULATOR_HOME=/mnt/android-avd"
 
       - name: Connection Info
         run: |
           echo ""
           echo "==========================================="
-          echo "✅ DESKTOP + ANDROID STUDIO READY!"
+          echo "✅ REMOTE DESKTOP + /MNT READY!"
           echo "==========================================="
           echo ""
-          echo "📱 VNC: 159.195.6.61:5901"
+          echo "📱 VNC Connection: 159.195.6.61:5901"
           echo "💾 Storage: 72GB (root) + 74GB (/mnt)"
           echo "📊 TOTAL: 146GB"
           echo ""
-          echo "🎯 Android Development:"
-          echo "  • SDK Home: /mnt/android-sdk (using 74GB)"
-          echo "  • AVD Home: /mnt/android-avd (using 74GB)"
-          echo "  • Studio: /mnt/data/android-studio"
+          echo "🎯 Android Development Setup:"
+          echo "  ✓ SDK Home: /mnt/android-sdk"
+          echo "  ✓ AVD Home: /mnt/android-avd"
+          echo "  ✓ Download Dir: /mnt/data"
           echo ""
-          echo "🚀 Launch Android Studio on VNC:"
-          echo "  ~/.launch-android-studio.sh"
+          echo "📥 To Install Android Studio on VNC:"
+          echo "  1. Download Android Studio manually"
+          echo "  2. Extract to /mnt/data/"
+          echo "  3. Run: /mnt/data/android-studio/bin/studio.sh"
+          echo "  4. SDK will auto-install to /mnt/android-sdk ✅"
           echo ""
           echo "⏱️  Duration: ${{ github.event.inputs.duration || '6' }} hours"
           echo "==========================================="
@@ -192,6 +168,5 @@ jobs:
           path: |
             /tmp/xvfb.log
             /tmp/xfce.log
-            /tmp/sdk.log
             frpc.log
           retention-days: 7
