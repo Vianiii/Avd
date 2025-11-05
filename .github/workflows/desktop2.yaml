@@ -55,7 +55,7 @@ jobs:
       - name: Start VNC Server
         run: |
           export DISPLAY=:1
-          x11vnc -display :1 -forever -nopw -rfbport 5901 -bg
+          x11vnc -display :1 -forever -reopen -noxdamage -repeat -shared -nopw -rfbport 5901 -bg
           sleep 2
           echo "✅ VNC server ready"
 
@@ -106,12 +106,25 @@ jobs:
         run: |
           DURATION=${{ github.event.inputs.duration || '6' }}
           SECONDS=$((DURATION * 3600))
+          INTERVAL=600
+          ITERATIONS=$((SECONDS / INTERVAL))
           
-          for ((i=0; i<$((SECONDS/600)); i++)); do
-            sleep 600
+          for ((i=0; i<ITERATIONS; i++)); do
+            sleep $INTERVAL
+            
+            # Check and restart VNC if needed
+            if ! pgrep -f "x11vnc.*5901" > /dev/null; then
+              echo "⚠️ [$((i*10)) min] VNC process died, restarting..."
+              export DISPLAY=:1
+              x11vnc -display :1 -forever -reopen -noxdamage -repeat -shared -nopw -rfbport 5901 -bg
+              sleep 2
+              echo "✅ VNC restarted"
+            fi
+            
+            # Health check output
             RUNNING=$(ps aux | grep -E 'Xvfb|x11vnc|frpc' | grep -v grep | wc -l)
-            ROOT=$(df / | grep -oP 'd+(?=%)' | head -1)
-            MNT=$(df /mnt | grep -oP 'd+(?=%)' | head -1)
+            ROOT=$(df / | awk 'NR==2 {print $5}' | tr -d '%')
+            MNT=$(df /mnt | awk 'NR==2 {print $5}' | tr -d '%')
             echo "[$((i*10)) min] Services: $RUNNING | Disk: /$ROOT% | /mnt:$MNT% ✅"
           done
 
